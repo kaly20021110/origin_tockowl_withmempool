@@ -99,18 +99,7 @@ class NodeParameters:
         # SMVBA
         # VABA
         # Mercury
-        protocol = json['consensus']['protocol']
-        if protocol == "mvba":
-            json['consensus']['protocol'] = 0
-        elif protocol == "smvba":
-            json['consensus']['protocol'] = 1
-        elif protocol == "vaba":
-            json['consensus']['protocol'] = 2
-        elif protocol == "Mercury":
-            json['consensus']['protocol'] = 3
-        else:
-            raise ConfigError(f'invaild protocol type: {protocol}')
-        
+        json['consensus']['protocol'] = 1
         self.json = json
 
     def print(self, filename):
