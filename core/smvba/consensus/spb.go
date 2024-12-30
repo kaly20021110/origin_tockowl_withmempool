@@ -4,6 +4,7 @@ import (
 	"bft/mvba/core"
 	"bft/mvba/crypto"
 	"bft/mvba/logger"
+	"bft/mvba/pool"
 	"sync"
 	"sync/atomic"
 )
@@ -103,7 +104,7 @@ func (s *SPB) processVote(p *SPBVote) {
 		if p.Phase == SPB_ONE_PHASE {
 			if proposal, err := NewSPBProposal(
 				s.c.Name,
-				nil,
+				NewBlock(s.Proposer, pool.Batch{}, -1),
 				s.Epoch,
 				s.Round,
 				SPB_TWO_PHASE,

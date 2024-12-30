@@ -5,17 +5,17 @@ from benchmark.commands import CommandMaker
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import BenchError,Print
-from alibaba.instance import InstanceManager
-from alibaba.remote import Bench
+from aws.instance import InstanceManager
+from aws.remote import Bench
 
 @task
 def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'nodes': 4,
-        'duration': 10,
+        'duration': 30,
         'rate': 5_000,                  # tx send rate
-        'batch_size': 500,              # the max number of tx that can be hold 
+        'batch_size': 200,              # the max number of tx that can be hold 
         'log_level': 0b1111,            # 0x1 infolevel 0x2 debuglevel 0x4 warnlevel 0x8 errorlevel
         'protocol': "sMVBA"
     }
@@ -33,6 +33,7 @@ def local(ctx):
             "ddos": False,              # DDOS attack
             "faults": 0,                # the number of byzantine node
             "retry_delay": 5_000,       # request block period
+            'protocol': "sMVBA"
         }
     }
     try:
