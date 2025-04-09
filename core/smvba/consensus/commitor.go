@@ -21,19 +21,20 @@ func NewCommittor(callBack chan<- struct{}) *Committor {
 }
 
 func (c *Committor) Commit(block *Block) {
-	if block.Epoch < c.Index {
-		return
-	}
-	c.Blocks[block.Epoch] = block
-	for {
-		if b, ok := c.Blocks[c.Index]; ok {
-			c.commitCh <- b
-			delete(c.Blocks, c.Index)
-			c.Index++
-		} else {
-			break
-		}
-	}
+	c.commitCh <- block
+	// if block.Epoch < c.Index {
+	// 	return
+	// }
+	// c.Blocks[block.Epoch] = block
+	// for {
+	// 	if b, ok := c.Blocks[c.Index]; ok {
+	// 		c.commitCh <- b
+	// 		delete(c.Blocks, c.Index)
+	// 		c.Index++
+	// 	} else {
+	// 		break
+	// 	}
+	// }
 }
 
 func (c *Committor) run() {

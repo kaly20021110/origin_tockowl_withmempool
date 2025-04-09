@@ -20,12 +20,19 @@ type Core struct {
 	Elector    *Elector
 	Commitor   *Committor
 
-	FinishFlags  map[int64]map[int64]map[core.NodeID]crypto.Digest // finish? map[epoch][round][node] = blockHash
-	SPbInstances map[int64]map[int64]map[core.NodeID]*SPB          // map[epoch][node][round]
-	DoneFlags    map[int64]map[int64]struct{}
-	ReadyFlags   map[int64]map[int64]struct{}
-	HaltFlags    map[int64]struct{}
-	Epoch        int64
+	CBCInstances map[int64]map[core.NodeID]*Promote //map[epoch][core.NodeID]
+	VSet         map[int64]map[core.NodeID]bool     //index standfor the QC and proposal
+	Q1Set        map[int64]map[core.NodeID]bool
+	Q2Set        map[int64]map[core.NodeID]bool
+	Q3Set        map[int64]map[core.NodeID]bool
+	// mV           sync.RWMutex
+	// mQ1          sync.RWMutex
+	// mQ2          sync.RWMutex
+	// mQ3          sync.RWMutex
+	ParentQ1    map[int64]QuorumCert //save the index of best priority
+	ParentQ2    map[int64]QuorumCert
+	CommitEpoch int64
+	Epoch       int64
 }
 
 func NewCore(
@@ -48,20 +55,82 @@ func NewCore(
 		TxPool:       TxPool,
 		Transimtor:   Transimtor,
 		Epoch:        0,
+		CommitEpoch:  0,
 		Aggreator:    NewAggreator(Committee),
 		Elector:      NewElector(SigService, Committee),
 		Commitor:     NewCommittor(callBack),
-		FinishFlags:  make(map[int64]map[int64]map[core.NodeID]crypto.Digest),
-		SPbInstances: make(map[int64]map[int64]map[core.NodeID]*SPB),
-		DoneFlags:    make(map[int64]map[int64]struct{}),
-		ReadyFlags:   make(map[int64]map[int64]struct{}),
-		HaltFlags:    make(map[int64]struct{}),
+		CBCInstances: make(map[int64]map[core.NodeID]*Promote),
+		VSet:         make(map[int64]map[core.NodeID]bool),
+		Q1Set:        make(map[int64]map[core.NodeID]bool),
+		Q2Set:        make(map[int64]map[core.NodeID]bool),
+		Q3Set:        make(map[int64]map[core.NodeID]bool),
+		ParentQ1:     make(map[int64]QuorumCert),
+		ParentQ2:     make(map[int64]QuorumCert),
 	}
-
 	return c
 }
 
-func (c *Core) messgaeFilter(epoch int64) bool {
+func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
+	switch settype {
+	case 0:
+		{
+			if _, ok := c.VSet[epoch]; !ok {
+				c.VSet[epoch] = make(map[core.NodeID]bool)
+			}
+			c.VSet[epoch][node] = true
+		}
+	case 1:
+		{
+			if _, ok := c.Q1Set[epoch]; !ok {
+				c.Q1Set[epoch] = make(map[core.NodeID]bool)
+			}
+			c.Q1Set[epoch][node] = true
+
+		}
+	case 2:
+		{
+			if _, ok := c.Q2Set[epoch]; !ok {
+				c.Q2Set[epoch] = make(map[core.NodeID]bool)
+			}
+			c.Q2Set[epoch][node] = true
+		}
+	case 3:
+		{
+			if _, ok := c.Q3Set[epoch]; !ok {
+				c.Q3Set[epoch] = make(map[core.NodeID]bool)
+			}
+			c.Q3Set[epoch][node] = true
+		}
+	}
+}
+
+func (c *Core) NewSet(epoch int64) {
+	if _, ok := c.VSet[epoch]; !ok {
+		c.VSet[epoch] = make(map[core.NodeID]bool)
+	}
+	if _, ok := c.Q1Set[epoch]; ok {
+		c.Q1Set[epoch] = make(map[core.NodeID]bool)
+	}
+	if _, ok := c.Q2Set[epoch]; ok {
+		c.Q2Set[epoch] = make(map[core.NodeID]bool)
+	}
+	if _, ok := c.Q3Set[epoch]; ok {
+		c.Q3Set[epoch] = make(map[core.NodeID]bool)
+	}
+}
+
+// 有可能先收到了bestexchange，然后更新了自己的相关内容，导致出现问题
+func (c *Core) AchieveFinish(epoch int64) bool {
+	if len(c.VSet[epoch]) >= c.Committee.HightThreshold() && len(c.Q1Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q2Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q3Set[epoch]) >= c.Committee.HightThreshold() {
+		logger.Warn.Printf("AchieveFinish is right epoch %d\n", epoch)
+		return true
+	} else {
+		logger.Warn.Printf("AchieveFinish is wrong epoch %d\n", epoch)
+		return false
+	}
+}
+
+func (c *Core) messageFilter(epoch int64) bool {
 	return epoch < c.Epoch
 }
 
@@ -92,357 +161,190 @@ func (c *Core) getBlock(digest crypto.Digest) (*Block, error) {
 	return b, err
 }
 
-func (c *Core) getSpbInstance(epoch, round int64, node core.NodeID) *SPB {
-	rItems, ok := c.SPbInstances[epoch]
+func (c *Core) getCBCInstance(epoch int64, node core.NodeID) *Promote {
+	rItems, ok := c.CBCInstances[epoch]
 	if !ok {
-		rItems = make(map[int64]map[core.NodeID]*SPB)
-		c.SPbInstances[epoch] = rItems
+		rItems = make(map[core.NodeID]*Promote)
+		c.CBCInstances[epoch] = rItems
 	}
-	instances, ok := rItems[round]
+	instance, ok := rItems[node]
 	if !ok {
-		instances = make(map[core.NodeID]*SPB)
-		rItems[round] = instances
+		instance = NewPromote(c, epoch, node)
+		rItems[node] = instance
 	}
-	instance, ok := instances[node]
-	if !ok {
-		instance = NewSPB(c, epoch, round, node)
-		instances[node] = instance
-	}
-
 	return instance
 }
 
-func (c *Core) hasFinish(epoch, round int64, node core.NodeID) (bool, crypto.Digest) {
-	if items, ok := c.FinishFlags[epoch]; !ok {
-		return false, crypto.Digest{}
-	} else {
-		if item, ok := items[round]; !ok {
-			return false, crypto.Digest{}
-		} else {
-			d, ok := item[node]
-			return ok, d
-		}
-	}
-}
-
-func (c *Core) hasReady(epoch, round int64) bool {
-	if items, ok := c.ReadyFlags[epoch]; !ok {
-		c.ReadyFlags[epoch] = make(map[int64]struct{})
-		return false
-	} else {
-		_, ok = items[round]
-		return ok
-	}
-}
-
-func (c *Core) hasDone(epoch, round int64) bool {
-	if items, ok := c.DoneFlags[epoch]; !ok {
-		c.DoneFlags[epoch] = make(map[int64]struct{})
-		return false
-	} else {
-		_, ok = items[round]
-		return ok
-	}
-}
-
-func (c *Core) generatorBlock(epoch int64) *Block {
-	block := NewBlock(c.Name, c.TxPool.GetBatch(), epoch)
-	if block.Batch.ID != -1 {
-		logger.Info.Printf("create Block epoch %d node %d batch_id %d \n", block.Epoch, block.Proposer, block.Batch.ID)
-	}
+func (c *Core) generatorBlock(epoch int64, prehash crypto.Digest) *Block {
+	block := NewBlock(c.Name, c.TxPool.GetBatch(), epoch, prehash)
+	logger.Info.Printf("create Block epoch %d node %d batch_id %d \n", block.Epoch, block.Proposer, block.Batch.ID)
+	// if block.Batch.ID != -1 {
+	// 	logger.Info.Printf("create Block epoch %d node %d batch_id %d \n", block.Epoch, block.Proposer, block.Batch.ID)
+	// }
 	return block
 }
 
 /*********************************** Protocol Start***************************************/
-func (c *Core) handleSpbProposal(p *SPBProposal) error {
-	logger.Debug.Printf("Processing SPBProposal proposer %d epoch %d round %d phase %d\n", p.Author, p.Epoch, p.Round, p.Phase)
-
-	//ensure all block is received
-	if p.Phase == SPB_ONE_PHASE {
-		if _, ok := c.HaltFlags[p.Epoch]; ok {
-			if leader := c.Elector.Leader(p.Epoch, p.Round); leader == p.Author {
-				c.Commitor.Commit(p.B)
-			}
-		}
-	}
-
-	//discard message
-	if c.messgaeFilter(p.Epoch) {
+func (c *Core) handleProposal(p *CBCProposal) error {
+	logger.Debug.Printf("processing proposal epoch %d phase %d proposer %d\n", p.Epoch, p.Phase, p.Author)
+	if c.messageFilter(p.Epoch) {
 		return nil
 	}
-
-	//Store Block at first time
-	if p.Phase == SPB_ONE_PHASE {
+	if p.Phase == CBC_ONE_PHASE {
 		if err := c.storeBlock(p.B); err != nil {
-			logger.Error.Printf("Store Block error: %v\n", err)
 			return err
 		}
+		//check priority  safeproposal index越小对应的值越大
+		logger.Debug.Printf("p.ParentQC1.Priorityindex %d c.ParentQ2[p.Epoch-1].Priorityindex%d\n", p.ParentQC1.Priorityindex, c.ParentQ2[p.Epoch-1].Priorityindex)
+		if p.Epoch == c.Epoch && p.ParentQC1.Priorityindex > c.ParentQ2[p.Epoch-1].Priorityindex && p.Epoch != 0 {
+			return nil
+		}
 	}
-
-	spb := c.getSpbInstance(p.Epoch, p.Round, p.Author)
-	go spb.processProposal(p)
-
+	switch p.Phase {
+	case CBC_ONE_PHASE:
+		c.AddSet(0, p.Epoch, p.Author)
+	case CBC_TWO_PHASE:
+		c.AddSet(1, p.Epoch, p.Author)
+	case CBC_THREE_PHASE:
+		c.AddSet(2, p.Epoch, p.Author)
+	case LAST:
+		c.AddSet(3, p.Epoch, p.Author)
+	}
+	logger.Warn.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", p.Epoch, len(c.VSet[p.Epoch]), len(c.Q1Set[p.Epoch]), len(c.Q2Set[p.Epoch]), len(c.Q3Set[p.Epoch]))
+	go c.getCBCInstance(p.Epoch, p.Author).ProcessProposal(p)
 	return nil
 }
 
-func (c *Core) handleSpbVote(v *SPBVote) error {
-	logger.Debug.Printf("Processing SPBVote proposer %d epoch %d round %d phase %d\n", v.Proposer, v.Epoch, v.Round, v.Phase)
-
-	//discard message
-	if c.messgaeFilter(v.Epoch) {
+func (c *Core) handleVote(v *CBCVote) error {
+	logger.Debug.Printf("processing vote epoch %d phase %d proposer %d\n", v.Epoch, v.Phase, v.Proposer)
+	if c.messageFilter(v.Epoch) {
 		return nil
 	}
-
-	spb := c.getSpbInstance(v.Epoch, v.Round, v.Proposer)
-	go spb.processVote(v)
-
+	go c.getCBCInstance(v.Epoch, v.Proposer).ProcessVote(v)
 	return nil
 }
 
-func (c *Core) handleFinish(f *Finish) error {
-	logger.Debug.Printf("Processing Finish epoch %d round %d\n", f.Epoch, f.Round)
-
-	//discard message
-	if c.messgaeFilter(f.Epoch) {
+func (c *Core) handleElectShare(e *ElectShare) error {
+	logger.Debug.Printf("processing electShare epoch %d from %d\n", e.Epoch, e.Author)
+	if c.messageFilter(e.Epoch) {
 		return nil
 	}
-	if flag, err := c.Aggreator.AddFinishVote(f); err != nil {
+	if leadermap, err := c.Elector.AddShareVote(e); err != nil {
 		return err
-	} else {
-		rF, ok := c.FinishFlags[f.Epoch]
-		if !ok {
-			rF = make(map[int64]map[core.NodeID]crypto.Digest)
-			c.FinishFlags[f.Epoch] = rF
-		}
-		nF, ok := rF[f.Round]
-		if !ok {
-			nF = make(map[core.NodeID]crypto.Digest)
-			rF[f.Round] = nF
-		}
-		nF[f.Author] = f.BlockHash
-		if flag {
-			return c.invokeDoneAndShare(f.Epoch, f.Round)
-		}
-	}
-
-	return nil
-}
-
-func (c *Core) invokeDoneAndShare(epoch, round int64) error {
-	logger.Debug.Printf("Processing invoke Done and Share epoch %d,round %d\n", epoch, round)
-
-	if !c.hasDone(epoch, round) {
-
-		done, _ := NewDone(c.Name, epoch, round, c.SigService)
-		share, _ := NewElectShare(c.Name, epoch, round, c.SigService)
-
-		c.Transimtor.Send(c.Name, core.NONE, done)
-		c.Transimtor.Send(c.Name, core.NONE, share)
-		c.Transimtor.RecvChannel() <- done
-		c.Transimtor.RecvChannel() <- share
-
-		items, ok := c.DoneFlags[epoch]
-		if !ok {
-			items = make(map[int64]struct{})
-			c.DoneFlags[epoch] = items
-		}
-		items[round] = struct{}{}
-	}
-
-	return nil
-}
-
-func (c *Core) handleDone(d *Done) error {
-	logger.Debug.Printf("Processing Done epoch %d round %d\n", d.Epoch, d.Round)
-
-	//discard message
-	if c.messgaeFilter(d.Epoch) {
-		return nil
-	}
-
-	if flag, err := c.Aggreator.AddDoneVote(d); err != nil {
-		return err
-	} else if flag == DONE_LOW_FLAG {
-		return c.invokeDoneAndShare(d.Epoch, d.Round)
-	} else if flag == DONE_HIGH_FLAG {
-		items, ok := c.ReadyFlags[d.Epoch]
-		if !ok {
-			items = make(map[int64]struct{})
-			c.ReadyFlags[d.Epoch] = items
-		}
-		items[d.Round] = struct{}{}
-		return c.processLeader(d.Epoch, d.Round)
-	}
-
-	return nil
-}
-
-func (c *Core) handleElectShare(share *ElectShare) error {
-	logger.Debug.Printf("Processing ElectShare epoch %d round %d\n", share.Epoch, share.Round)
-
-	//discard message
-	if c.messgaeFilter(share.Epoch) {
-		return nil
-	}
-
-	if leader, err := c.Elector.AddShareVote(share); err != nil {
-		return err
-	} else if leader != core.NONE {
-		c.processLeader(share.Epoch, share.Round)
-	}
-
-	return nil
-}
-
-func (c *Core) processLeader(epoch, round int64) error {
-	logger.Debug.Printf("Processing Leader epoch %d round %d Leader %d\n", epoch, round, c.Elector.Leader(epoch, round))
-	if c.hasReady(epoch, round) {
-		if leader := c.Elector.Leader(epoch, round); leader != core.NONE {
-			if ok, d := c.hasFinish(epoch, round, leader); ok {
-				//send halt
-				halt, _ := NewHalt(c.Name, leader, d, epoch, round, c.SigService)
-				c.Transimtor.Send(c.Name, core.NONE, halt)
-				c.Transimtor.RecvChannel() <- halt
-			} else {
-				//send preVote
-				var preVote *Prevote
-				if spb := c.getSpbInstance(epoch, round, leader); spb.IsLock() {
-					if blockHash, ok := spb.GetBlockHash().(crypto.Digest); !ok {
-						panic("block hash is nil")
-					} else {
-						preVote, _ = NewPrevote(c.Name, leader, epoch, round, VOTE_FLAG_YES, blockHash, c.SigService)
-					}
-				} else {
-					preVote, _ = NewPrevote(c.Name, leader, epoch, round, VOTE_FLAG_NO, crypto.Digest{}, c.SigService)
+	} else if leadermap[0] != -1 { //已经形成了优先级序列
+		bestv := BestMessage{core.NONE, -1, nil}
+		bestq1 := BestMessage{core.NONE, -1, nil}
+		bestq2 := BestMessage{core.NONE, -1, nil}
+		bestq3 := BestMessage{core.NONE, -1, nil}
+		for i := 0; i < c.Committee.Size(); i++ {
+			node := leadermap[i]
+			if _, ok := c.VSet[e.Epoch][node]; ok {
+				if bestv.BestNode == core.NONE {
+					bestv.BestNode = node
+					bestv.BestIndex = i
 				}
-				c.Transimtor.Send(c.Name, core.NONE, preVote)
-				c.Transimtor.RecvChannel() <- preVote
+			}
+			if _, ok := c.Q1Set[e.Epoch][node]; ok {
+				if bestq1.BestNode == core.NONE {
+					bestq1.BestNode = node
+					bestq1.BestIndex = i
+				}
+			}
+			if _, ok := c.Q2Set[e.Epoch][node]; ok {
+				if bestq2.BestNode == core.NONE {
+					bestq2.BestNode = node
+					bestq2.BestIndex = i
+				}
+			}
+			if _, ok := c.Q3Set[e.Epoch][node]; ok {
+				if bestq3.BestNode == core.NONE {
+					bestq3.BestNode = node
+					bestq3.BestIndex = i
+				}
+			}
+			if bestv.BestNode != core.NONE && bestq1.BestNode != core.NONE && bestq2.BestNode != core.NONE && bestq3.BestNode != core.NONE {
+				break
 			}
 		}
+		msg, _ := NewBestMsg(c.Name, e.Epoch, bestv, bestq1, bestq2, bestq3, c.SigService)
+		c.Transimtor.Send(c.Name, core.NONE, msg)
+		c.Transimtor.RecvChannel() <- msg
 	}
-
 	return nil
 }
-
-func (c *Core) handlePrevote(pv *Prevote) error {
-	logger.Debug.Printf("Processing Prevote epoch %d round %d\n", pv.Epoch, pv.Round)
-
-	//discard message
-	if c.messgaeFilter(pv.Epoch) {
-		return nil
-	}
-
-	if flag, err := c.Aggreator.AddPreVote(pv); err != nil {
-		return err
-	} else if flag == ACTION_NO {
-		vote, _ := NewFinVote(c.Name, pv.Leader, pv.Epoch, pv.Round, VOTE_FLAG_NO, pv.BlockHash, c.SigService)
-		c.Transimtor.Send(c.Name, core.NONE, vote)
-		c.Transimtor.RecvChannel() <- vote
-	} else if flag == ACTION_YES {
-		vote, _ := NewFinVote(c.Name, pv.Leader, pv.Epoch, pv.Round, VOTE_FLAG_YES, pv.BlockHash, c.SigService)
-		c.Transimtor.Send(c.Name, core.NONE, vote)
-		c.Transimtor.RecvChannel() <- vote
-	}
-
-	return nil
-}
-
-func (c *Core) handleFinvote(fv *FinVote) error {
-	logger.Debug.Printf("Processing FinVote epoch %d round %d\n", fv.Epoch, fv.Round)
-
-	//discard message
-	if c.messgaeFilter(fv.Epoch) {
-		return nil
-	}
-
-	if flag, err := c.Aggreator.AddFinVote(fv); err != nil {
-		return err
-	} else if flag == ACTION_YES {
-		return c.advanceNextRound(fv.Epoch, fv.Round, flag, fv.BlockHash)
-	} else if flag == ACTION_NO {
-		return c.advanceNextRound(fv.Epoch, fv.Round, flag, crypto.Digest{})
-	} else if flag == ACTION_COMMIT {
-		halt, _ := NewHalt(c.Name, fv.Leader, fv.BlockHash, fv.Epoch, fv.Round, c.SigService)
-		c.Transimtor.Send(c.Name, core.NONE, halt)
-		c.Transimtor.RecvChannel() <- halt
-	}
-
-	return nil
-}
-
-func (c *Core) advanceNextRound(epoch, round int64, flag int8, blockHash crypto.Digest) error {
-	logger.Debug.Printf("Processing next round [epoch %d round %d]\n", epoch, round)
-
-	//discard message
-	if c.messgaeFilter(epoch) {
-		return nil
-	}
-
-	if flag == ACTION_NO { //next round block self
-		if inte := c.getSpbInstance(epoch, round, c.Name).GetBlockHash(); inte != nil {
-			blockHash = inte.(crypto.Digest)
+func (c *Core) Best(epoch int64, set map[int64]map[core.NodeID]bool) (int, core.NodeID) {
+	nodeset := c.Elector.GetPriority(epoch)
+	for i := 0; i < c.Committee.Size(); i++ {
+		node := nodeset[i]
+		if _, ok := set[epoch][node]; ok {
+			return i, node
 		}
 	}
-
-	var proposal *SPBProposal
-	if block, err := c.getBlock(blockHash); err != nil {
-		return err
-	} else if block != nil {
-		proposal, _ = NewSPBProposal(c.Name, block, epoch, round+1, SPB_ONE_PHASE, c.SigService)
-	} else {
-		proposal, _ = NewSPBProposal(c.Name, c.generatorBlock(epoch), epoch, round+1, SPB_ONE_PHASE, c.SigService)
-	}
-	c.Transimtor.Send(c.Name, core.NONE, proposal)
-	c.Transimtor.RecvChannel() <- proposal
-
-	return nil
+	return -1, core.NONE
 }
 
-func (c *Core) handleHalt(h *Halt) error {
-	logger.Debug.Printf("Processing Halt epoch %d\n", h.Epoch)
-
-	//discard message
-	if c.messgaeFilter(h.Epoch) {
+func (c *Core) handleBestMsg(m *BestMsg) error {
+	logger.Debug.Printf("processing best message epoch %d author %d\n", m.Epoch, m.Author)
+	if c.messageFilter(m.Epoch) {
 		return nil
 	}
-
-	//Check leader
-
-	if _, ok := c.HaltFlags[h.Epoch]; !ok {
-		c.Elector.SetLeader(h.Epoch, h.Round, h.Leader)
-		if err := c.handleOutput(h.Epoch, h.BlockHash); err != nil {
-			return err
+	c.AddSet(0, m.Epoch, m.BestV.BestNode)
+	c.AddSet(1, m.Epoch, m.BestQ1.BestNode)
+	c.AddSet(2, m.Epoch, m.BestQ2.BestNode)
+	c.AddSet(3, m.Epoch, m.BestQ3.BestNode)
+	//聚合2f+1个bestexchange消息，如果收集到足够的消息
+	if finish, err := c.Aggreator.addBestMessage(m); err != nil {
+		return err
+	} else if finish { //收集到了2f+1条消息
+		logger.Debug.Printf("actually recieve 2f+1 best messages epoch %d \n", m.Epoch)
+		//update parents q1 and q2
+		_, bestvNode := c.Best(m.Epoch, c.VSet)
+		bestq1Index, bestq1Node := c.Best(m.Epoch, c.Q1Set)
+		bestq2Index, bestq2Node := c.Best(m.Epoch, c.Q2Set)
+		bestq3Index, bestq3Node := c.Best(m.Epoch, c.Q3Set)
+		c.ParentQ1[m.Epoch] = QuorumCert{m.Epoch, bestq1Index, bestq1Node}
+		c.ParentQ2[m.Epoch] = QuorumCert{m.Epoch, bestq2Index, bestq2Node}
+		//commit rule
+		if bestvNode == bestq3Node || bestq3Index == 0 { //第二个条件下，有可能没有收到这个块
+			//如何commit当前块以及它所有的祖先区块?  如何commit所有的祖先区块
+			logger.Debug.Printf("actually commit blocks epoch %d \n", m.Epoch)
+			_, node := c.Best(m.Epoch, c.Q3Set)
+			blockHash := c.getCBCInstance(m.Epoch, node).BlockHash()
+			if block, err := c.getBlock(*blockHash); err == nil {
+				logger.Debug.Printf("success get the block and commit blocks epoch %d \n", m.Epoch)
+				c.CommitAncestor(c.CommitEpoch, m.Epoch, block)
+				c.Commitor.Commit(block)
+				c.CommitEpoch = m.Epoch
+			}
+		} else {
+			logger.Info.Printf("can not commit any blocks in this epoch %d \n", m.Epoch)
 		}
-		c.HaltFlags[h.Epoch] = struct{}{}
-		c.advanceNextEpoch(h.Epoch + 1)
+		//进入下一个epoch
+		prehash := c.getCBCInstance(m.Epoch, bestq1Node).blockHash
+		c.advanceNextEpoch(m.Epoch+1, *prehash)
 	}
-
 	return nil
 }
 
-func (c *Core) handleOutput(epoch int64, blockHash crypto.Digest) error {
-	logger.Debug.Printf("Processing Ouput epoch %d \n", epoch)
-	if b, err := c.getBlock(blockHash); err != nil {
-		return err
-	} else if b != nil {
-		c.Commitor.Commit(b)
-		// if b.Proposer != c.Name {
-		// 	temp := c.getSpbInstance(epoch, 0, c.Name).GetBlockHash()
-		// 	if temp != nil {
-		// 		if block, err := c.getBlock(temp.(crypto.Digest)); err == nil && block != nil {
-		// 			c.TxPool.PutBatch(block.Batch)
-		// 		}
-		// 	}
-		// }
-	} else {
-		logger.Debug.Printf("Processing retriever epoch %d \n", epoch)
+func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *Block) {
+	blockmap := make(map[int64]crypto.Digest)
+	for i := nowepoch - 1; i >= lastepoch; i-- {
+		blockmap[i] = block.PreHash
 	}
-
-	return nil
+	for i := lastepoch + 1; i < nowepoch; i++ {
+		if block, err := c.getBlock(blockmap[i]); err == nil {
+			logger.Debug.Printf("success get the ancestors epoch %d \n", i)
+			c.Commitor.Commit(block)
+		} else {
+			logger.Debug.Printf("error get the ancestors epoch %d \n", i)
+			logger.Error.Printf("error get the ancestors epoch %d \n", i)
+			//c.Commitor.Commit(block)
+		}
+	}
 }
 
 /*********************************** Protocol End***************************************/
-func (c *Core) advanceNextEpoch(epoch int64) {
+func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	if epoch <= c.Epoch {
 		return
 	}
@@ -450,17 +352,22 @@ func (c *Core) advanceNextEpoch(epoch int64) {
 	//Clear Something
 
 	c.Epoch = epoch
-	block := c.generatorBlock(epoch)
-	proposal, _ := NewSPBProposal(c.Name, block, epoch, 0, SPB_ONE_PHASE, c.SigService)
+	c.NewSet(c.Epoch)
+	block := c.generatorBlock(epoch, prehash)
+	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[epoch-1], c.SigService)
 	c.Transimtor.Send(c.Name, core.NONE, proposal)
 	c.Transimtor.RecvChannel() <- proposal
 }
 
 func (c *Core) Run() {
-
+	if c.Name < core.NodeID(c.Parameters.Faults) {
+		logger.Debug.Printf("Node %d is faulty\n", c.Name)
+		return
+	}
 	//first proposal
-	block := c.generatorBlock(c.Epoch)
-	proposal, _ := NewSPBProposal(c.Name, block, c.Epoch, 0, SPB_ONE_PHASE, c.SigService)
+	block := c.generatorBlock(c.Epoch, crypto.Digest{})
+	c.NewSet(c.Epoch)
+	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, QuorumCert{0, -1, core.NONE}, c.SigService)
 	if err := c.Transimtor.Send(c.Name, core.NONE, proposal); err != nil {
 		panic(err)
 	}
@@ -481,22 +388,14 @@ func (c *Core) Run() {
 
 				switch msg.MsgType() {
 
-				case SPBProposalType:
-					err = c.handleSpbProposal(msg.(*SPBProposal))
-				case SPBVoteType:
-					err = c.handleSpbVote(msg.(*SPBVote))
-				case FinishType:
-					err = c.handleFinish(msg.(*Finish))
-				case DoneType:
-					err = c.handleDone(msg.(*Done))
+				case CBCProposalType:
+					err = c.handleProposal(msg.(*CBCProposal))
+				case CBCVoteType:
+					err = c.handleVote(msg.(*CBCVote))
 				case ElectShareType:
 					err = c.handleElectShare(msg.(*ElectShare))
-				case PrevoteType:
-					err = c.handlePrevote(msg.(*Prevote))
-				case FinVoteType:
-					err = c.handleFinvote(msg.(*FinVote))
-				case HaltType:
-					err = c.handleHalt(msg.(*Halt))
+				case BestMsgType:
+					err = c.handleBestMsg(msg.(*BestMsg))
 
 				}
 			}

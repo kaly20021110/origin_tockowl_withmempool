@@ -3,6 +3,7 @@ package consensus
 import (
 	"bft/mvba/core"
 	"bft/mvba/crypto"
+	"bft/mvba/logger"
 	"bft/mvba/pool"
 	"bytes"
 	"encoding/gob"
@@ -11,8 +12,10 @@ import (
 )
 
 const (
-	SPB_ONE_PHASE int8 = iota
-	SPB_TWO_PHASE
+	CBC_ONE_PHASE int8 = iota
+	CBC_TWO_PHASE
+	CBC_THREE_PHASE
+	LAST
 )
 
 const (
@@ -28,13 +31,15 @@ type Block struct {
 	Proposer core.NodeID
 	Batch    pool.Batch
 	Epoch    int64
+	PreHash  crypto.Digest
 }
 
-func NewBlock(proposer core.NodeID, Batch pool.Batch, Epoch int64) *Block {
+func NewBlock(proposer core.NodeID, Batch pool.Batch, Epoch int64, prehash crypto.Digest) *Block {
 	return &Block{
 		Proposer: proposer,
 		Batch:    Batch,
 		Epoch:    Epoch,
+		PreHash:  prehash,
 	}
 }
 
@@ -59,200 +64,170 @@ func (b *Block) Hash() crypto.Digest {
 	hasher.Add(strconv.AppendInt(nil, int64(b.Proposer), 2))
 	hasher.Add(strconv.AppendInt(nil, b.Epoch, 2))
 	hasher.Add(strconv.AppendInt(nil, int64(b.Batch.ID), 2))
+	hasher.Add(b.PreHash[:])
 	return hasher.Sum256(nil)
 }
 
-type SPBProposal struct {
+// 是否要定义Halt消息我不确定
+const (
+	CBCProposalType int = iota
+	CBCVoteType
+	FinishType
+	ElectShareType
+	BestMsgType
+)
+
+var DefaultMessageTypeMap = map[int]reflect.Type{
+	CBCProposalType: reflect.TypeOf(CBCProposal{}),
+	CBCVoteType:     reflect.TypeOf(CBCVote{}),
+	FinishType:      reflect.TypeOf(Finish{}),
+	ElectShareType:  reflect.TypeOf(ElectShare{}),
+	BestMsgType:     reflect.TypeOf(BestMsg{}),
+}
+
+type CBCProposal struct {
 	Author    core.NodeID
-	B         *Block
 	Epoch     int64
-	Round     int64
 	Phase     int8
+	B         *Block
+	ParentQC1 QuorumCert
 	Signature crypto.Signature
 }
 
-func NewSPBProposal(Author core.NodeID, B *Block, Epoch, Round int64, Phase int8, sigService *crypto.SigService) (*SPBProposal, error) {
-	proposal := &SPBProposal{
-		Author: Author,
-		B:      B,
-		Epoch:  Epoch,
-		Round:  Round,
-		Phase:  Phase,
+func NewCBCProposal(author core.NodeID, epoch int64, phase int8, B *Block, parentqc1 QuorumCert, sigService *crypto.SigService) (*CBCProposal, error) {
+	p := &CBCProposal{
+		Author:    author,
+		Epoch:     epoch,
+		Phase:     phase,
+		B:         B,
+		ParentQC1: parentqc1,
 	}
-	sig, err := sigService.RequestSignature(proposal.Hash())
+	sig, err := sigService.RequestSignature(p.Hash())
 	if err != nil {
 		return nil, err
 	}
-	proposal.Signature = sig
-	return proposal, nil
+	p.Signature = sig
+	return p, nil
 }
 
-func (p *SPBProposal) Verify(committee core.Committee) bool {
+func (p *CBCProposal) Verify(committee core.Committee) bool {
 	pub := committee.Name(p.Author)
 	return p.Signature.Verify(pub, p.Hash())
 }
 
-func (p *SPBProposal) Hash() crypto.Digest {
+func (p *CBCProposal) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
 	hasher.Add(strconv.AppendInt(nil, int64(p.Author), 2))
 	hasher.Add(strconv.AppendInt(nil, p.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, p.Round, 2))
 	hasher.Add(strconv.AppendInt(nil, int64(p.Phase), 2))
 	if p.B != nil {
 		d := p.B.Hash()
 		hasher.Add(d[:])
 	}
 	return hasher.Sum256(nil)
+
 }
 
-func (*SPBProposal) MsgType() int {
-	return SPBProposalType
+func (*CBCProposal) MsgType() int {
+	return CBCProposalType
 }
 
-type SPBVote struct {
+type CBCVote struct {
 	Author    core.NodeID
 	Proposer  core.NodeID
-	BlockHash crypto.Digest
 	Epoch     int64
-	Round     int64
 	Phase     int8
-	Signature crypto.Signature
+	BlockHash crypto.Digest
+	Signature crypto.Signature //什么时候用部分签名，什么时候用全签名 这个地方我觉得应该用signshare
 }
 
-func NewSPBVote(Author, Proposer core.NodeID, BlockHash crypto.Digest, Epoch, Round int64, Phase int8, sigService *crypto.SigService) (*SPBVote, error) {
-	vote := &SPBVote{
+func NewCBCVote(Author, Proposer core.NodeID, BlockHash crypto.Digest, Epoch int64, Phase int8, sigService *crypto.SigService) (*CBCVote, error) {
+	vote := &CBCVote{
 		Author:    Author,
 		Proposer:  Proposer,
 		BlockHash: BlockHash,
 		Epoch:     Epoch,
-		Round:     Round,
 		Phase:     Phase,
 	}
 	sig, err := sigService.RequestSignature(vote.Hash())
 	if err != nil {
+		logger.Debug.Printf("requestsifnature error\n")
 		return nil, err
 	}
 	vote.Signature = sig
 	return vote, nil
 }
 
-func (v *SPBVote) Verify(committee core.Committee) bool {
+func (v *CBCVote) Verify(committee core.Committee) bool {
 	pub := committee.Name(v.Author)
 	return v.Signature.Verify(pub, v.Hash())
 }
 
-func (v *SPBVote) Hash() crypto.Digest {
+func (v *CBCVote) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
 	hasher.Add(strconv.AppendInt(nil, int64(v.Author), 2))
-	hasher.Add(strconv.AppendInt(nil, v.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, v.Round, 2))
 	hasher.Add(strconv.AppendInt(nil, int64(v.Phase), 2))
+	hasher.Add(strconv.AppendInt(nil, int64(v.Epoch), 2))
+	hasher.Add(strconv.AppendInt(nil, int64(v.Proposer), 2))
 	hasher.Add(v.BlockHash[:])
 	return hasher.Sum256(nil)
 }
-
-func (*SPBVote) MsgType() int {
-	return SPBVoteType
+func (*CBCVote) MsgType() int {
+	return CBCVoteType
 }
 
-type Finish struct {
+type Finish struct { //这个消息不需要，只需要定义一个判断函数即可
 	Author    core.NodeID
-	BlockHash crypto.Digest
 	Epoch     int64
-	Round     int64
 	Signature crypto.Signature
 }
 
-func NewFinish(Author core.NodeID, BlockHash crypto.Digest, Epoch, Round int64, sigService *crypto.SigService) (*Finish, error) {
-	finish := &Finish{
-		Author:    Author,
-		BlockHash: BlockHash,
-		Epoch:     Epoch,
-		Round:     Round,
-	}
-	sig, err := sigService.RequestSignature(finish.Hash())
-	if err != nil {
-		return nil, err
-	}
-	finish.Signature = sig
-	return finish, nil
-}
-
-func (f *Finish) Verify(committee core.Committee) bool {
-	pub := committee.Name(f.Author)
-	return f.Signature.Verify(pub, f.Hash())
-}
-
-func (f *Finish) Hash() crypto.Digest {
-	hasher := crypto.NewHasher()
-	hasher.Add(f.BlockHash[:])
-	hasher.Add(strconv.AppendInt(nil, int64(f.Author), 2))
-	hasher.Add(strconv.AppendInt(nil, f.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, f.Round, 2))
-	return hasher.Sum256(nil)
-}
-
-func (*Finish) MsgType() int {
-	return FinishType
-}
-
-type Done struct {
-	Author    core.NodeID
-	Epoch     int64
-	Round     int64
-	Signature crypto.Signature
-}
-
-func NewDone(Author core.NodeID, epoch, round int64, sigService *crypto.SigService) (*Done, error) {
-	done := &Done{
+func NewFinish(Author core.NodeID, Epoch int64, sigService *crypto.SigService) (*Finish, error) {
+	d := &Finish{
 		Author: Author,
-		Epoch:  epoch,
-		Round:  round,
+		Epoch:  Epoch,
 	}
-	sig, err := sigService.RequestSignature(done.Hash())
+	sig, err := sigService.RequestSignature(d.Hash())
 	if err != nil {
 		return nil, err
 	}
-	done.Signature = sig
-	return done, nil
+	d.Signature = sig
+	return d, nil
 }
 
-func (d *Done) Verify(committee core.Committee) bool {
+func (d *Finish) Verify(committee core.Committee) bool {
 	pub := committee.Name(d.Author)
 	return d.Signature.Verify(pub, d.Hash())
 }
 
-func (d *Done) Hash() crypto.Digest {
+func (d *Finish) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
 	hasher.Add(strconv.AppendInt(nil, int64(d.Author), 2))
 	hasher.Add(strconv.AppendInt(nil, d.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, d.Round, 2))
 	return hasher.Sum256(nil)
 }
 
-func (*Done) MsgType() int {
-	return DoneType
+func (d *Finish) MsgType() int {
+	return FinishType
 }
 
 type ElectShare struct {
 	Author   core.NodeID
 	Epoch    int64
-	Round    int64
 	SigShare crypto.SignatureShare
 }
 
-func NewElectShare(Author core.NodeID, epoch, round int64, sigService *crypto.SigService) (*ElectShare, error) {
-	elect := &ElectShare{
+func NewElectShare(Author core.NodeID, Epoch int64, sigService *crypto.SigService) (*ElectShare, error) {
+	e := &ElectShare{
 		Author: Author,
-		Epoch:  epoch,
-		Round:  round,
+		Epoch:  Epoch,
 	}
-	sig, err := sigService.RequestTsSugnature(elect.Hash())
+	sig, err := sigService.RequestTsSugnature(e.Hash())
 	if err != nil {
 		return nil, err
 	}
-	elect.SigShare = sig
-	return elect, nil
+	e.SigShare = sig
+	return e, nil
 }
 
 func (e *ElectShare) Verify(committee core.Committee) bool {
@@ -263,7 +238,6 @@ func (e *ElectShare) Verify(committee core.Committee) bool {
 func (e *ElectShare) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
 	hasher.Add(strconv.AppendInt(nil, e.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, e.Round, 2))
 	return hasher.Sum256(nil)
 }
 
@@ -271,160 +245,61 @@ func (*ElectShare) MsgType() int {
 	return ElectShareType
 }
 
-type Prevote struct {
+type QuorumCert struct {
+	Epoch int64
+	//QC            []byte
+	Priorityindex int //优先级序列
+	node          core.NodeID
+	//Signature crypto.Signature
+}
+
+type BestMessage struct {
+	BestNode  core.NodeID
+	BestIndex int
+	BestQC    *crypto.Digest //this maybe nil
+}
+type BestMsg struct {
 	Author    core.NodeID
-	Leader    core.NodeID
 	Epoch     int64
-	Round     int64
-	Flag      int8
-	BlockHash crypto.Digest
+	BestV     BestMessage
+	BestQ1    BestMessage
+	BestQ2    BestMessage
+	BestQ3    BestMessage
 	Signature crypto.Signature
 }
 
-func NewPrevote(Author, Leader core.NodeID, Epoch, Round int64, flag int8, BlockHash crypto.Digest, sigService *crypto.SigService) (*Prevote, error) {
-	prevote := &Prevote{
-		Author:    Author,
-		Leader:    Leader,
-		Epoch:     Epoch,
-		Round:     Round,
-		Flag:      flag,
-		BlockHash: BlockHash,
+func NewBestMsg(author core.NodeID, Epoch int64, bestv BestMessage, bestq1 BestMessage, bestq2 BestMessage, bestq3 BestMessage, sigService *crypto.SigService) (*BestMsg, error) {
+	bms := &BestMsg{
+		Author: author,
+		Epoch:  Epoch,
+		BestV:  bestv,
+		BestQ1: bestq1,
+		BestQ2: bestq2,
+		BestQ3: bestq3,
 	}
-	sig, err := sigService.RequestSignature(prevote.Hash())
+	sig, err := sigService.RequestSignature(bms.Hash())
 	if err != nil {
 		return nil, err
 	}
-	prevote.Signature = sig
-	return prevote, nil
+	bms.Signature = sig
+	return bms, nil
 }
 
-func (p *Prevote) Verify(committee core.Committee) bool {
-	pub := committee.Name(p.Author)
-	return p.Signature.Verify(pub, p.Hash())
+func (bms *BestMsg) Verify(committee core.Committee) bool {
+	pub := committee.Name(bms.Author)
+	return bms.Signature.Verify(pub, bms.Hash())
 }
-
-func (p *Prevote) Hash() crypto.Digest {
+func (bms *BestMsg) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
-	hasher.Add(strconv.AppendInt(nil, int64(p.Author), 2))
-	hasher.Add(strconv.AppendInt(nil, int64(p.Leader), 2))
-	hasher.Add(strconv.AppendInt(nil, p.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, p.Round, 2))
-	hasher.Add(strconv.AppendInt(nil, int64(p.Flag), 2))
-	hasher.Add(p.BlockHash[:])
+	hasher.Add(strconv.AppendInt(nil, int64(bms.Author), 2))
+	hasher.Add(strconv.AppendInt(nil, bms.Epoch, 2))
+	hasher.Add(strconv.AppendInt(nil, int64(bms.BestV.BestNode), 2))
+	hasher.Add(strconv.AppendInt(nil, int64(bms.BestQ1.BestNode), 2))
+	hasher.Add(strconv.AppendInt(nil, int64(bms.BestQ2.BestNode), 2))
+	hasher.Add(strconv.AppendInt(nil, int64(bms.BestQ3.BestNode), 2))
 	return hasher.Sum256(nil)
 }
 
-func (*Prevote) MsgType() int {
-	return PrevoteType
-}
-
-type FinVote struct {
-	Author    core.NodeID
-	Leader    core.NodeID
-	Epoch     int64
-	Round     int64
-	Flag      int8
-	BlockHash crypto.Digest
-	Signature crypto.Signature
-}
-
-func NewFinVote(Author, Leader core.NodeID, Epoch, Round int64, flag int8, BlockHash crypto.Digest, sigService *crypto.SigService) (*FinVote, error) {
-	prevote := &FinVote{
-		Author:    Author,
-		Epoch:     Epoch,
-		Round:     Round,
-		Flag:      flag,
-		BlockHash: BlockHash,
-	}
-	sig, err := sigService.RequestSignature(prevote.Hash())
-	if err != nil {
-		return nil, err
-	}
-	prevote.Signature = sig
-	return prevote, nil
-}
-
-func (p *FinVote) Verify(committee core.Committee) bool {
-	pub := committee.Name(p.Author)
-	return p.Signature.Verify(pub, p.Hash())
-}
-
-func (p *FinVote) Hash() crypto.Digest {
-	hasher := crypto.NewHasher()
-	hasher.Add(strconv.AppendInt(nil, int64(p.Author), 2))
-	hasher.Add(strconv.AppendInt(nil, int64(p.Leader), 2))
-	hasher.Add(strconv.AppendInt(nil, p.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, p.Round, 2))
-	hasher.Add(strconv.AppendInt(nil, int64(p.Flag), 2))
-	hasher.Add(p.BlockHash[:])
-	return hasher.Sum256(nil)
-}
-
-func (*FinVote) MsgType() int {
-	return FinVoteType
-}
-
-type Halt struct {
-	Author    core.NodeID
-	Epoch     int64
-	Round     int64
-	Leader    core.NodeID
-	BlockHash crypto.Digest
-	Signature crypto.Signature
-}
-
-func NewHalt(Author, Leader core.NodeID, BlockHash crypto.Digest, Epoch, Round int64, sigService *crypto.SigService) (*Halt, error) {
-	h := &Halt{
-		Author:    Author,
-		Epoch:     Epoch,
-		Round:     Round,
-		Leader:    Leader,
-		BlockHash: BlockHash,
-	}
-	sig, err := sigService.RequestSignature(h.Hash())
-	if err != nil {
-		return nil, err
-	}
-	h.Signature = sig
-	return h, nil
-}
-
-func (h *Halt) Verify(committee core.Committee) bool {
-	pub := committee.Name(h.Author)
-	return h.Signature.Verify(pub, h.Hash())
-}
-
-func (h *Halt) Hash() crypto.Digest {
-	hasher := crypto.NewHasher()
-	hasher.Add(strconv.AppendInt(nil, int64(h.Author), 2))
-	hasher.Add(strconv.AppendInt(nil, h.Epoch, 2))
-	hasher.Add(strconv.AppendInt(nil, int64(h.Leader), 2))
-	hasher.Add(h.BlockHash[:])
-	return hasher.Sum256(nil)
-}
-
-func (*Halt) MsgType() int {
-	return HaltType
-}
-
-const (
-	SPBProposalType int = iota
-	SPBVoteType
-	FinishType
-	DoneType
-	ElectShareType
-	PrevoteType
-	FinVoteType
-	HaltType
-)
-
-var DefaultMessageTypeMap = map[int]reflect.Type{
-	SPBProposalType: reflect.TypeOf(SPBProposal{}),
-	SPBVoteType:     reflect.TypeOf(SPBVote{}),
-	FinishType:      reflect.TypeOf(Finish{}),
-	DoneType:        reflect.TypeOf(Done{}),
-	ElectShareType:  reflect.TypeOf(ElectShare{}),
-	PrevoteType:     reflect.TypeOf(Prevote{}),
-	FinVoteType:     reflect.TypeOf(FinVote{}),
-	HaltType:        reflect.TypeOf(Halt{}),
+func (*BestMsg) MsgType() int {
+	return BestMsgType
 }

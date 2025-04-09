@@ -28,7 +28,8 @@ class LogParser:
                 results = p.map(self._parse_nodes, nodes)
         except (ValueError, IndexError) as e:
             raise ParseError(f'Failed to parse node logs: {e}')
-        batchs,proposals, commits,configs = zip(*results)
+        nocounts,batchs,proposals, commits,configs = zip(*results)
+        self.nocounts=self._merge_results([x.items() for x in nocounts])
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
         self.batchs = self._merge_results([x.items() for x in batchs])
@@ -46,6 +47,8 @@ class LogParser:
     def _parse_nodes(self, log):
         if search(r'panic', log) is not None:
             raise ParseError('Client(s) panicked')
+        tmp = findall(r'\[INFO] (.*) core.* can not commit any blocks in this epoch (\d+)', log)
+        nocounts = { id:self._to_posix(t) for t,id in tmp}
         
         tmp = findall(r'\[INFO] (.*) pool.* Received Batch (\d+)', log)
         batchs = { id:self._to_posix(t) for t,id in tmp}
@@ -77,7 +80,7 @@ class LogParser:
             }
         }
 
-        return batchs,proposals, commits,configs
+        return nocounts,batchs,proposals, commits,configs
 
     def _to_posix(self, string):
         # 解析时间字符串为 datetime 对象
@@ -118,6 +121,8 @@ class LogParser:
         consensus_tps, _ = self._consensus_throughput()
         end_to_end_tps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1000
+        nocounts = len(self.nocounts)
+        commitcount=len(self.commits)
         tx_size = self.configs['pool']['tx_size']
         batch_size = self.configs['pool']['batch_size']
         rate = self.configs['pool']['rate']
@@ -142,6 +147,8 @@ class LogParser:
             '\n'
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            f' The epoch count can not commit block: {round(nocounts):,}\n'
+            f' The all epoch count commit block: {round(commitcount):,}\n'
             '-----------------------------------------\n'
         )
 
