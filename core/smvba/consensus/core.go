@@ -348,7 +348,8 @@ func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	if epoch <= c.Epoch {
 		return
 	}
-	logger.Debug.Println("advance next epoch", epoch)
+	logger.Debug.Printf("advance next epoch %d\n", epoch)
+	logger.Info.Printf("advance next epoch %d\n", epoch)
 	//Clear Something
 
 	c.Epoch = epoch
