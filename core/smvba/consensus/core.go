@@ -6,6 +6,8 @@ import (
 	"bft/mvba/logger"
 	"bft/mvba/pool"
 	"bft/mvba/store"
+	"math/rand"
+	"sync"
 )
 
 type Core struct {
@@ -33,6 +35,10 @@ type Core struct {
 	ParentQ2    map[int64]QuorumCert
 	CommitEpoch int64
 	Epoch       int64
+	RandomPhase map[int64]int8 //每一轮停止阶段
+	Stopstate   bool           //用于判断当前状态是否是停止状态
+
+	mSet sync.RWMutex
 }
 
 func NewCore(
@@ -56,6 +62,7 @@ func NewCore(
 		Transimtor:   Transimtor,
 		Epoch:        0,
 		CommitEpoch:  0,
+		Stopstate:    false,
 		Aggreator:    NewAggreator(Committee),
 		Elector:      NewElector(SigService, Committee),
 		Commitor:     NewCommittor(callBack),
@@ -66,11 +73,14 @@ func NewCore(
 		Q3Set:        make(map[int64]map[core.NodeID]bool),
 		ParentQ1:     make(map[int64]QuorumCert),
 		ParentQ2:     make(map[int64]QuorumCert),
+		RandomPhase:  make(map[int64]int8),
 	}
 	return c
 }
 
 func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
+	c.mSet.RLock()
+	defer c.mSet.RUnlock()
 	switch settype {
 	case 0:
 		{
@@ -78,6 +88,7 @@ func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
 				c.VSet[epoch] = make(map[core.NodeID]bool)
 			}
 			c.VSet[epoch][node] = true
+			logger.Warn.Printf("epoch %dVSet length is %d\n", epoch, len(c.VSet[epoch]))
 		}
 	case 1:
 		{
@@ -85,7 +96,7 @@ func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
 				c.Q1Set[epoch] = make(map[core.NodeID]bool)
 			}
 			c.Q1Set[epoch][node] = true
-
+			logger.Warn.Printf("epoch %d Q1Set length is %d\n", epoch, len(c.Q1Set[epoch]))
 		}
 	case 2:
 		{
@@ -93,6 +104,7 @@ func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
 				c.Q2Set[epoch] = make(map[core.NodeID]bool)
 			}
 			c.Q2Set[epoch][node] = true
+			logger.Warn.Printf("epoch %d Q2Set length is %d\n", epoch, len(c.Q2Set[epoch]))
 		}
 	case 3:
 		{
@@ -100,27 +112,32 @@ func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
 				c.Q3Set[epoch] = make(map[core.NodeID]bool)
 			}
 			c.Q3Set[epoch][node] = true
+			logger.Warn.Printf("epoch %d Q3Set length is %d\n", epoch, len(c.Q3Set[epoch]))
 		}
 	}
 }
 
 func (c *Core) NewSet(epoch int64) {
+	c.mSet.RLock()
+	defer c.mSet.RUnlock()
 	if _, ok := c.VSet[epoch]; !ok {
 		c.VSet[epoch] = make(map[core.NodeID]bool)
 	}
-	if _, ok := c.Q1Set[epoch]; ok {
+	if _, ok := c.Q1Set[epoch]; !ok {
 		c.Q1Set[epoch] = make(map[core.NodeID]bool)
 	}
-	if _, ok := c.Q2Set[epoch]; ok {
+	if _, ok := c.Q2Set[epoch]; !ok {
 		c.Q2Set[epoch] = make(map[core.NodeID]bool)
 	}
-	if _, ok := c.Q3Set[epoch]; ok {
+	if _, ok := c.Q3Set[epoch]; !ok {
 		c.Q3Set[epoch] = make(map[core.NodeID]bool)
 	}
 }
 
 // 有可能先收到了bestexchange，然后更新了自己的相关内容，导致出现问题
 func (c *Core) AchieveFinish(epoch int64) bool {
+	c.mSet.RLock()
+	defer c.mSet.RUnlock()
 	if len(c.VSet[epoch]) >= c.Committee.HightThreshold() && len(c.Q1Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q2Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q3Set[epoch]) >= c.Committee.HightThreshold() {
 		logger.Warn.Printf("AchieveFinish is right epoch %d\n", epoch)
 		return true
@@ -190,6 +207,9 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 	if c.messageFilter(p.Epoch) {
 		return nil
 	}
+	if c.restartProtocol(p.Epoch) {
+		c.advanceNextEpoch(p.Epoch, crypto.Digest{})
+	}
 	if p.Phase == CBC_ONE_PHASE {
 		if err := c.storeBlock(p.B); err != nil {
 			return err
@@ -197,18 +217,50 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 		//check priority  safeproposal index越小对应的值越大
 		logger.Debug.Printf("p.ParentQC1.Priorityindex %d c.ParentQ2[p.Epoch-1].Priorityindex%d\n", p.ParentQC1.Priorityindex, c.ParentQ2[p.Epoch-1].Priorityindex)
 		if p.Epoch == c.Epoch && p.ParentQC1.Priorityindex > c.ParentQ2[p.Epoch-1].Priorityindex && p.Epoch != 0 {
+			logger.Info.Printf("the block is a wrong block in epoch %d\n", p.Epoch)
 			return nil
 		}
 	}
 	switch p.Phase {
 	case CBC_ONE_PHASE:
-		c.AddSet(0, p.Epoch, p.Author)
+		{
+			if c.stopProtocol(p.Epoch, STOP1) {
+				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP1\n")
+				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
+				return nil
+			}
+			c.AddSet(0, p.Epoch, p.Author)
+
+		}
 	case CBC_TWO_PHASE:
-		c.AddSet(1, p.Epoch, p.Author)
+		{
+			if c.stopProtocol(p.Epoch, STOP3) {
+				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP3\n")
+				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
+				return nil
+			}
+			c.AddSet(1, p.Epoch, p.Author)
+
+		}
 	case CBC_THREE_PHASE:
-		c.AddSet(2, p.Epoch, p.Author)
+		{
+			if c.stopProtocol(p.Epoch, STOP5) {
+				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP5\n")
+				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
+				return nil
+			}
+			c.AddSet(2, p.Epoch, p.Author)
+
+		}
 	case LAST:
-		c.AddSet(3, p.Epoch, p.Author)
+		{
+			if c.stopProtocol(p.Epoch, STOP7) {
+				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP7\n")
+				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
+				return nil
+			}
+			c.AddSet(3, p.Epoch, p.Author)
+		}
 	}
 	logger.Warn.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", p.Epoch, len(c.VSet[p.Epoch]), len(c.Q1Set[p.Epoch]), len(c.Q2Set[p.Epoch]), len(c.Q3Set[p.Epoch]))
 	go c.getCBCInstance(p.Epoch, p.Author).ProcessProposal(p)
@@ -220,6 +272,24 @@ func (c *Core) handleVote(v *CBCVote) error {
 	if c.messageFilter(v.Epoch) {
 		return nil
 	}
+	if c.restartProtocol(v.Epoch) {
+		c.advanceNextEpoch(v.Epoch, crypto.Digest{})
+	}
+	tmpphase := 2
+	switch v.Phase {
+	case CBC_ONE_PHASE:
+		tmpphase = 2
+	case CBC_TWO_PHASE:
+		tmpphase = 4
+	case CBC_THREE_PHASE:
+		tmpphase = 6
+	}
+
+	if c.stopProtocol(v.Epoch, int8(tmpphase)) {
+		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP 2 4 6\n")
+		//c.advanceNextEpoch(v.Epoch+1, crypto.Digest{})
+		return nil
+	}
 	go c.getCBCInstance(v.Epoch, v.Proposer).ProcessVote(v)
 	return nil
 }
@@ -227,6 +297,14 @@ func (c *Core) handleVote(v *CBCVote) error {
 func (c *Core) handleElectShare(e *ElectShare) error {
 	logger.Debug.Printf("processing electShare epoch %d from %d\n", e.Epoch, e.Author)
 	if c.messageFilter(e.Epoch) {
+		return nil
+	}
+	if c.restartProtocol(e.Epoch) {
+		c.advanceNextEpoch(e.Epoch, crypto.Digest{})
+	}
+	if c.stopProtocol(e.Epoch, STOP8) {
+		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP8\n")
+		//c.advanceNextEpoch(e.Epoch+1, crypto.Digest{})
 		return nil
 	}
 	if leadermap, err := c.Elector.AddShareVote(e); err != nil {
@@ -288,6 +366,14 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 	if c.messageFilter(m.Epoch) {
 		return nil
 	}
+	if c.restartProtocol(m.Epoch) {
+		c.advanceNextEpoch(m.Epoch, crypto.Digest{})
+	}
+	if c.stopProtocol(m.Epoch, STOP9) {
+		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP9\n")
+		//c.advanceNextEpoch(m.Epoch+1, crypto.Digest{})
+		return nil
+	}
 	c.AddSet(0, m.Epoch, m.BestV.BestNode)
 	c.AddSet(1, m.Epoch, m.BestQ1.BestNode)
 	c.AddSet(2, m.Epoch, m.BestQ2.BestNode)
@@ -344,6 +430,7 @@ func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *Block) {
 }
 
 /*********************************** Protocol End***************************************/
+
 func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	if epoch <= c.Epoch {
 		return
@@ -351,19 +438,60 @@ func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	logger.Debug.Printf("advance next epoch %d\n", epoch)
 	logger.Info.Printf("advance next epoch %d\n", epoch)
 	//Clear Something
-
+	c.Stopstate = false
 	c.Epoch = epoch
 	c.NewSet(c.Epoch)
+	c.initStopCore(c.Epoch)
+	if c.stopProtocol(c.Epoch, STOP0) {
+		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+		c.Stopstate = true
+		//c.advanceNextEpoch(epoch+1, crypto.Digest{})
+		return
+	}
 	block := c.generatorBlock(epoch, prehash)
 	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[epoch-1], c.SigService)
 	c.Transimtor.Send(c.Name, core.NONE, proposal)
 	c.Transimtor.RecvChannel() <- proposal
 }
 
+func (c *Core) restartProtocol(epoch int64) bool {
+	if c.Name < core.NodeID(c.Parameters.Faults) {
+		if epoch > c.Epoch && c.Stopstate {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Core) initStopCore(epoch int64) {
+	r := rand.New(rand.NewSource(epoch))
+	randnum := int8(r.Int() % 10)
+	c.RandomPhase[epoch] = randnum
+	logger.Info.Printf("initStopCore in epoch %d and the stopphase is %d\n", epoch, randnum)
+}
+
+func (c *Core) stopProtocol(epoch int64, phase int8) bool {
+	if c.Name < core.NodeID(c.Parameters.Faults) {
+		if c.RandomPhase[epoch] <= phase {
+			c.Stopstate = true //如果满足这种情况，那么就说明目前core的状态就是已经宕机的状态
+			logger.Info.Printf("stopProtocol is begining epoch is %d phase is %d", epoch, c.RandomPhase[epoch])
+			return true
+		} else {
+			return false
+		}
+	}
+	return false
+}
+
 func (c *Core) Run() {
 	if c.Name < core.NodeID(c.Parameters.Faults) {
 		logger.Debug.Printf("Node %d is faulty\n", c.Name)
-		return
+		c.initStopCore(c.Epoch)
+		if c.stopProtocol(c.Epoch, STOP0) {
+			logger.Info.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+			//c.advanceNextEpoch(c.Epoch+1, crypto.Digest{})
+			return
+		}
 	}
 	//first proposal
 	block := c.generatorBlock(c.Epoch, crypto.Digest{})

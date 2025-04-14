@@ -12,6 +12,19 @@ import (
 )
 
 const (
+	STOP0 int8 = iota
+	STOP1
+	STOP2
+	STOP3
+	STOP4
+	STOP5
+	STOP6
+	STOP7
+	STOP8
+	STOP9
+)
+
+const (
 	CBC_ONE_PHASE int8 = iota
 	CBC_TWO_PHASE
 	CBC_THREE_PHASE
