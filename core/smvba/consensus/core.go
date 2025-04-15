@@ -27,16 +27,12 @@ type Core struct {
 	Q1Set        map[int64]map[core.NodeID]bool
 	Q2Set        map[int64]map[core.NodeID]bool
 	Q3Set        map[int64]map[core.NodeID]bool
-	// mV           sync.RWMutex
-	// mQ1          sync.RWMutex
-	// mQ2          sync.RWMutex
-	// mQ3          sync.RWMutex
-	ParentQ1    map[int64]QuorumCert //save the index of best priority
-	ParentQ2    map[int64]QuorumCert
-	CommitEpoch int64
-	Epoch       int64
-	RandomPhase map[int64]int8 //每一轮停止阶段
-	Stopstate   bool           //用于判断当前状态是否是停止状态
+	ParentQ1     map[int64]QuorumCert //save the index of best priority
+	ParentQ2     map[int64]QuorumCert
+	CommitEpoch  int64
+	Epoch        int64
+	RandomPhase  map[int64]int8 //每一轮停止阶段
+	Stopstate    bool           //用于判断当前状态是否是停止状态
 
 	mSet sync.RWMutex
 }
@@ -63,7 +59,7 @@ func NewCore(
 		Epoch:        0,
 		CommitEpoch:  0,
 		Stopstate:    false,
-		Aggreator:    NewAggreator(Committee),
+		Aggreator:    NewAggreator(SigService, Committee),
 		Elector:      NewElector(SigService, Committee),
 		Commitor:     NewCommittor(callBack),
 		CBCInstances: make(map[int64]map[core.NodeID]*Promote),
@@ -449,7 +445,7 @@ func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 		return
 	}
 	block := c.generatorBlock(epoch, prehash)
-	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[epoch-1], c.SigService)
+	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[epoch-1], nil, c.SigService)
 	c.Transimtor.Send(c.Name, core.NONE, proposal)
 	c.Transimtor.RecvChannel() <- proposal
 }
@@ -496,7 +492,7 @@ func (c *Core) Run() {
 	//first proposal
 	block := c.generatorBlock(c.Epoch, crypto.Digest{})
 	c.NewSet(c.Epoch)
-	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, QuorumCert{0, -1, core.NONE}, c.SigService)
+	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, QuorumCert{0, -1, core.NONE}, nil, c.SigService)
 	if err := c.Transimtor.Send(c.Name, core.NONE, proposal); err != nil {
 		panic(err)
 	}

@@ -104,16 +104,18 @@ type CBCProposal struct {
 	Phase     int8
 	B         *Block
 	ParentQC1 QuorumCert
+	VoteQC    []byte
 	Signature crypto.Signature
 }
 
-func NewCBCProposal(author core.NodeID, epoch int64, phase int8, B *Block, parentqc1 QuorumCert, sigService *crypto.SigService) (*CBCProposal, error) {
+func NewCBCProposal(author core.NodeID, epoch int64, phase int8, B *Block, parentqc1 QuorumCert, qc []byte, sigService *crypto.SigService) (*CBCProposal, error) {
 	p := &CBCProposal{
 		Author:    author,
 		Epoch:     epoch,
 		Phase:     phase,
 		B:         B,
 		ParentQC1: parentqc1,
+		VoteQC:    qc,
 	}
 	sig, err := sigService.RequestSignature(p.Hash())
 	if err != nil {
@@ -137,6 +139,7 @@ func (p *CBCProposal) Hash() crypto.Digest {
 		d := p.B.Hash()
 		hasher.Add(d[:])
 	}
+	hasher.Add(p.VoteQC)
 	return hasher.Sum256(nil)
 
 }
@@ -151,7 +154,7 @@ type CBCVote struct {
 	Epoch     int64
 	Phase     int8
 	BlockHash crypto.Digest
-	Signature crypto.Signature //什么时候用部分签名，什么时候用全签名 这个地方我觉得应该用signshare
+	Signature crypto.SignatureShare //什么时候用部分签名，什么时候用全签名 这个地方我觉得应该用signshare
 }
 
 func NewCBCVote(Author, Proposer core.NodeID, BlockHash crypto.Digest, Epoch int64, Phase int8, sigService *crypto.SigService) (*CBCVote, error) {
@@ -162,7 +165,8 @@ func NewCBCVote(Author, Proposer core.NodeID, BlockHash crypto.Digest, Epoch int
 		Epoch:     Epoch,
 		Phase:     Phase,
 	}
-	sig, err := sigService.RequestSignature(vote.Hash())
+	sig, err := sigService.RequestTsSugnature(vote.Hash())
+	//sig, err := sigService.RequestTsSignature(vote.Hash())
 	if err != nil {
 		logger.Debug.Printf("requestsifnature error\n")
 		return nil, err
@@ -172,13 +176,13 @@ func NewCBCVote(Author, Proposer core.NodeID, BlockHash crypto.Digest, Epoch int
 }
 
 func (v *CBCVote) Verify(committee core.Committee) bool {
-	pub := committee.Name(v.Author)
-	return v.Signature.Verify(pub, v.Hash())
+	//_ := committee.Name(v.Author)
+	return v.Signature.Verify(v.Hash())
 }
 
 func (v *CBCVote) Hash() crypto.Digest {
 	hasher := crypto.NewHasher()
-	hasher.Add(strconv.AppendInt(nil, int64(v.Author), 2))
+	//hasher.Add(strconv.AppendInt(nil, int64(v.Author), 2))
 	hasher.Add(strconv.AppendInt(nil, int64(v.Phase), 2))
 	hasher.Add(strconv.AppendInt(nil, int64(v.Epoch), 2))
 	hasher.Add(strconv.AppendInt(nil, int64(v.Proposer), 2))

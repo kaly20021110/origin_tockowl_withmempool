@@ -139,23 +139,38 @@ func (p *Promote) ProcessVote(vote *CBCVote) {
 	p.mHash.RUnlock()
 
 	p.mVoteCnt.Lock()
-	p.voteCnts[vote.Phase]++
-	nums := p.voteCnts[vote.Phase]
+	//p.voteCnts[vote.Phase]++
+	//nums := p.voteCnts[vote.Phase]
+	finish, qcvalue, _ := p.C.Aggreator.addVote(vote)
 	p.mVoteCnt.Unlock()
-
-	if nums == p.C.Committee.HightThreshold() {
+	if finish {
 		if vote.Phase < CBC_THREE_PHASE {
 			QC := QuorumCert{vote.Epoch, -1, core.NONE}
-			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
+			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, qcvalue, p.C.SigService)
+			//proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
 			p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
 			p.C.Transimtor.RecvChannel() <- proposal
 		} else {
 			QC := QuorumCert{vote.Epoch, -1, core.NONE}
-			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, LAST, nil, QC, p.C.SigService)
+			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, LAST, nil, QC, qcvalue, p.C.SigService)
+			///proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
 			p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
 			p.C.Transimtor.RecvChannel() <- proposal
 		}
 	}
+	// if nums == p.C.Committee.HightThreshold() {
+	// 	if vote.Phase < CBC_THREE_PHASE {
+	// 		QC := QuorumCert{vote.Epoch, -1, core.NONE}
+	// 		proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
+	// 		p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
+	// 		p.C.Transimtor.RecvChannel() <- proposal
+	// 	} else {
+	// 		QC := QuorumCert{vote.Epoch, -1, core.NONE}
+	// 		proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, LAST, nil, QC, p.C.SigService)
+	// 		p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
+	// 		p.C.Transimtor.RecvChannel() <- proposal
+	// 	}
+	// }
 }
 
 func (p *Promote) BlockHash() *crypto.Digest {
