@@ -110,13 +110,31 @@ class LocalBench:
             self._kill_nodes()
 
             # Parse logs and return the parser.
+            log_dir = PathMaker.logs_path(self.ts)
             Print.info('Parsing logs...')
-            return LogParser.process(
-                PathMaker.logs_path(self.ts), 
-                self.node_parameters.faults, 
-                self.bench_parameters.protocol, 
-                self.node_parameters.ddos
+            log_parser = LogParser.process(
+                directory=log_dir,
+                faults=self.node_parameters.faults,
+                protocol=self.bench_parameters.protocol,
+                ddos=self.node_parameters.ddos
             )
+            output_file = PathMaker.result_file(
+                nodes,
+                rate,
+                self.node_parameters.tx_size,
+                batch_size,
+                self.node_parameters.faults,
+                self.ts
+            )
+            #os.makedirs(PathMaker.results_path(self.ts), exist_ok=True)
+            log_parser.print(output_file)
+            return log_parser
+            # return LogParser.process(
+            #     PathMaker.logs_path(self.ts), 
+            #     self.node_parameters.faults, 
+            #     self.bench_parameters.protocol, 
+            #     self.node_parameters.ddos
+            # )
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()

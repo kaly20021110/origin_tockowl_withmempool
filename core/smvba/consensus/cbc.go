@@ -50,6 +50,10 @@ func NewPromote(c *Core, epoch int64, proposer core.NodeID) *Promote {
 }
 
 func (p *Promote) ProcessProposal(proposal *CBCProposal) {
+	if proposal.Author != p.Proposer {
+		logger.Warn.Printf("promote error: the proposer of block is not match\n")
+		return
+	}
 	if proposal.Phase != CBC_ONE_PHASE {
 		p.mHash.RLock()
 		if p.blockHash == nil {
@@ -69,10 +73,10 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 	switch proposal.Phase {
 	case CBC_ONE_PHASE:
 		{
-			if proposal.Author != p.Proposer {
-				logger.Warn.Printf("promote error: the proposer of block is not match\n")
-				return
-			}
+			// if proposal.Author != p.Proposer {
+			// 	logger.Warn.Printf("promote error: the proposer of block is not match\n")
+			// 	return
+			// }
 			p.mHash.Lock()
 			d := proposal.B.Hash()
 			p.blockHash = &d
@@ -103,12 +107,14 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 	case LAST:
 		{
 			logger.Warn.Printf("enter the handleproposal with LAST epoch is %d\n", p.Epoch)
-			if p.C.AchieveFinish(p.Epoch) {
-				logger.Debug.Printf("finish the three-phase broadcast and beigin to achieve finish\n")
-				p.finishFlag.Store(true)
-				share, _ := NewElectShare(p.C.Name, p.Epoch, p.C.SigService)
-				p.C.Transimtor.Send(p.C.Name, core.NONE, share)
-				p.C.Transimtor.RecvChannel() <- share
+			if !p.IsFinish() { //只发送一次electshare
+				if p.C.AchieveFinish(p.Epoch) {
+					logger.Debug.Printf("finish the three-phase broadcast and beigin to achieve finish in epoch %d\n", p.Epoch)
+					p.finishFlag.Store(true)
+					share, _ := NewElectShare(p.C.Name, p.Epoch, p.C.SigService)
+					p.C.Transimtor.Send(p.C.Name, core.NONE, share)
+					p.C.Transimtor.RecvChannel() <- share
+				}
 			}
 		}
 	}
@@ -122,6 +128,10 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 }
 
 func (p *Promote) ProcessVote(vote *CBCVote) {
+	if p.Proposer != vote.Proposer {
+		logger.Warn.Printf("promote error: the vote of block is not match\n")
+		return
+	}
 	p.mHash.RLock()
 	if p.blockHash == nil {
 		p.mHash.RUnlock()

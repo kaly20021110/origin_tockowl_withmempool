@@ -31,8 +31,10 @@ type Core struct {
 	ParentQ2     map[int64]QuorumCert
 	CommitEpoch  int64
 	Epoch        int64
-	RandomPhase  map[int64]int8 //每一轮停止阶段
-	Stopstate    bool           //用于判断当前状态是否是停止状态
+	RandomPhase  map[int64]int8                     //每一轮停止阶段
+	Stopstate    bool                               //用于判断当前状态是否是停止状态
+	StopFlag     map[int64]map[core.NodeID]struct{} //用于停止前面的广播过程
+	Stopmu       sync.RWMutex
 
 	mSet sync.RWMutex
 }
@@ -70,13 +72,14 @@ func NewCore(
 		ParentQ1:     make(map[int64]QuorumCert),
 		ParentQ2:     make(map[int64]QuorumCert),
 		RandomPhase:  make(map[int64]int8),
+		StopFlag:     make(map[int64]map[core.NodeID]struct{}),
 	}
 	return c
 }
 
 func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
-	c.mSet.RLock()
-	defer c.mSet.RUnlock()
+	c.mSet.Lock()
+	defer c.mSet.Unlock()
 	switch settype {
 	case 0:
 		{
@@ -114,8 +117,8 @@ func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
 }
 
 func (c *Core) NewSet(epoch int64) {
-	c.mSet.RLock()
-	defer c.mSet.RUnlock()
+	c.mSet.Lock()
+	defer c.mSet.Unlock()
 	if _, ok := c.VSet[epoch]; !ok {
 		c.VSet[epoch] = make(map[core.NodeID]bool)
 	}
@@ -130,12 +133,12 @@ func (c *Core) NewSet(epoch int64) {
 	}
 }
 
-// 有可能先收到了bestexchange，然后更新了自己的相关内容，导致出现问题
-func (c *Core) AchieveFinish(epoch int64) bool {
+func (c *Core) AchieveFinish(epoch int64) bool { //这里可能出现读写冲突，暂时还没想明白怎么解决
 	c.mSet.RLock()
 	defer c.mSet.RUnlock()
 	if len(c.VSet[epoch]) >= c.Committee.HightThreshold() && len(c.Q1Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q2Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q3Set[epoch]) >= c.Committee.HightThreshold() {
 		logger.Warn.Printf("AchieveFinish is right epoch %d\n", epoch)
+		logger.Debug.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", epoch, len(c.VSet[epoch]), len(c.Q1Set[epoch]), len(c.Q2Set[epoch]), len(c.Q3Set[epoch]))
 		return true
 	} else {
 		logger.Warn.Printf("AchieveFinish is wrong epoch %d\n", epoch)
@@ -190,7 +193,7 @@ func (c *Core) getCBCInstance(epoch int64, node core.NodeID) *Promote {
 
 func (c *Core) generatorBlock(epoch int64, prehash crypto.Digest) *Block {
 	block := NewBlock(c.Name, c.TxPool.GetBatch(), epoch, prehash)
-	logger.Info.Printf("create Block epoch %d node %d batch_id %d \n", block.Epoch, block.Proposer, block.Batch.ID)
+	logger.Info.Printf("create Block epoch %d node %d batch_id %d\n", block.Epoch, block.Proposer, block.Batch.ID)
 	// if block.Batch.ID != -1 {
 	// 	logger.Info.Printf("create Block epoch %d node %d batch_id %d \n", block.Epoch, block.Proposer, block.Batch.ID)
 	// }
@@ -221,7 +224,7 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 	case CBC_ONE_PHASE:
 		{
 			if c.stopProtocol(p.Epoch, STOP1) {
-				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP1\n")
+				logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP1\n")
 				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
 				return nil
 			}
@@ -231,7 +234,7 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 	case CBC_TWO_PHASE:
 		{
 			if c.stopProtocol(p.Epoch, STOP3) {
-				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP3\n")
+				logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP3\n")
 				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
 				return nil
 			}
@@ -241,7 +244,7 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 	case CBC_THREE_PHASE:
 		{
 			if c.stopProtocol(p.Epoch, STOP5) {
-				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP5\n")
+				logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP5\n")
 				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
 				return nil
 			}
@@ -251,14 +254,23 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 	case LAST:
 		{
 			if c.stopProtocol(p.Epoch, STOP7) {
-				logger.Info.Printf("c.stopProtocol(m.Epoch, STOP7\n")
+				logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP7\n")
 				//c.advanceNextEpoch(p.Epoch+1, crypto.Digest{})
 				return nil
 			}
 			c.AddSet(3, p.Epoch, p.Author)
 		}
 	}
-	logger.Warn.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", p.Epoch, len(c.VSet[p.Epoch]), len(c.Q1Set[p.Epoch]), len(c.Q2Set[p.Epoch]), len(c.Q3Set[p.Epoch]))
+	//不能对这个值进行投票了，更新完set之后不对相应的题案进行投票了
+	c.Stopmu.RLock()
+	if _, oks := c.StopFlag[p.Epoch]; oks {
+		if _, ok := c.StopFlag[p.Epoch][c.Name]; ok {
+			c.Stopmu.RUnlock()
+			return nil
+		}
+	}
+	c.Stopmu.RUnlock()
+	//logger.Warn.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", p.Epoch, len(c.VSet[p.Epoch]), len(c.Q1Set[p.Epoch]), len(c.Q2Set[p.Epoch]), len(c.Q3Set[p.Epoch]))
 	go c.getCBCInstance(p.Epoch, p.Author).ProcessProposal(p)
 	return nil
 }
@@ -282,7 +294,7 @@ func (c *Core) handleVote(v *CBCVote) error {
 	}
 
 	if c.stopProtocol(v.Epoch, int8(tmpphase)) {
-		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP 2 4 6\n")
+		logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP 2 4 6\n")
 		//c.advanceNextEpoch(v.Epoch+1, crypto.Digest{})
 		return nil
 	}
@@ -299,19 +311,27 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 		c.advanceNextEpoch(e.Epoch, crypto.Digest{})
 	}
 	if c.stopProtocol(e.Epoch, STOP8) {
-		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP8\n")
+		logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP8\n")
 		//c.advanceNextEpoch(e.Epoch+1, crypto.Digest{})
 		return nil
 	}
 	if leadermap, err := c.Elector.AddShareVote(e); err != nil {
 		return err
 	} else if leadermap[0] != -1 { //已经形成了优先级序列
+		c.Stopmu.Lock()
+		_, ok := c.StopFlag[e.Epoch]
+		if !ok {
+			c.StopFlag[e.Epoch] = make(map[core.NodeID]struct{})
+		}
+		c.StopFlag[e.Epoch][c.Name] = struct{}{} //更新不能投票了
+		c.Stopmu.Unlock()
 		bestv := BestMessage{core.NONE, -1, nil}
 		bestq1 := BestMessage{core.NONE, -1, nil}
 		bestq2 := BestMessage{core.NONE, -1, nil}
 		bestq3 := BestMessage{core.NONE, -1, nil}
 		for i := 0; i < c.Committee.Size(); i++ {
 			node := leadermap[i]
+			c.mSet.RLock()
 			if _, ok := c.VSet[e.Epoch][node]; ok {
 				if bestv.BestNode == core.NONE {
 					bestv.BestNode = node
@@ -336,6 +356,7 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 					bestq3.BestIndex = i
 				}
 			}
+			c.mSet.RUnlock()
 			if bestv.BestNode != core.NONE && bestq1.BestNode != core.NONE && bestq2.BestNode != core.NONE && bestq3.BestNode != core.NONE {
 				break
 			}
@@ -366,7 +387,7 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 		c.advanceNextEpoch(m.Epoch, crypto.Digest{})
 	}
 	if c.stopProtocol(m.Epoch, STOP9) {
-		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP9\n")
+		logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP9\n")
 		//c.advanceNextEpoch(m.Epoch+1, crypto.Digest{})
 		return nil
 	}
@@ -380,26 +401,30 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 	} else if finish { //收集到了2f+1条消息
 		logger.Debug.Printf("actually recieve 2f+1 best messages epoch %d \n", m.Epoch)
 		//update parents q1 and q2
+		c.mSet.RLock()
 		_, bestvNode := c.Best(m.Epoch, c.VSet)
 		bestq1Index, bestq1Node := c.Best(m.Epoch, c.Q1Set)
 		bestq2Index, bestq2Node := c.Best(m.Epoch, c.Q2Set)
 		bestq3Index, bestq3Node := c.Best(m.Epoch, c.Q3Set)
+		c.mSet.RUnlock()
 		c.ParentQ1[m.Epoch] = QuorumCert{m.Epoch, bestq1Index, bestq1Node}
 		c.ParentQ2[m.Epoch] = QuorumCert{m.Epoch, bestq2Index, bestq2Node}
 		//commit rule
 		if bestvNode == bestq3Node || bestq3Index == 0 { //第二个条件下，有可能没有收到这个块
 			//如何commit当前块以及它所有的祖先区块?  如何commit所有的祖先区块
 			logger.Debug.Printf("actually commit blocks epoch %d \n", m.Epoch)
+			c.mSet.RLock()
 			_, node := c.Best(m.Epoch, c.Q3Set)
+			c.mSet.RUnlock()
 			blockHash := c.getCBCInstance(m.Epoch, node).BlockHash()
 			if block, err := c.getBlock(*blockHash); err == nil {
-				logger.Debug.Printf("success get the block and commit blocks epoch %d \n", m.Epoch)
+				logger.Debug.Printf("success get the block and commit blocks epoch %d\n", m.Epoch)
 				c.CommitAncestor(c.CommitEpoch, m.Epoch, block)
 				c.Commitor.Commit(block)
 				c.CommitEpoch = m.Epoch
 			}
 		} else {
-			logger.Info.Printf("can not commit any blocks in this epoch %d \n", m.Epoch)
+			logger.Info.Printf("can not commit any blocks in this epoch %d\n", m.Epoch)
 		}
 		//进入下一个epoch
 		prehash := c.getCBCInstance(m.Epoch, bestq1Node).blockHash
@@ -428,6 +453,9 @@ func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *Block) {
 /*********************************** Protocol End***************************************/
 
 func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
+	// if epoch > 300 {
+	// 	return
+	// }
 	if epoch <= c.Epoch {
 		return
 	}
@@ -439,7 +467,7 @@ func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	c.NewSet(c.Epoch)
 	c.initStopCore(c.Epoch)
 	if c.stopProtocol(c.Epoch, STOP0) {
-		logger.Info.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+		logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
 		c.Stopstate = true
 		//c.advanceNextEpoch(epoch+1, crypto.Digest{})
 		return
@@ -463,14 +491,14 @@ func (c *Core) initStopCore(epoch int64) {
 	r := rand.New(rand.NewSource(epoch))
 	randnum := int8(r.Int() % 10)
 	c.RandomPhase[epoch] = randnum
-	logger.Info.Printf("initStopCore in epoch %d and the stopphase is %d\n", epoch, randnum)
+	logger.Debug.Printf("initStopCore in epoch %d and the stopphase is %d\n", epoch, randnum)
 }
 
 func (c *Core) stopProtocol(epoch int64, phase int8) bool {
 	if c.Name < core.NodeID(c.Parameters.Faults) {
 		if c.RandomPhase[epoch] <= phase {
 			c.Stopstate = true //如果满足这种情况，那么就说明目前core的状态就是已经宕机的状态
-			logger.Info.Printf("stopProtocol is begining epoch is %d phase is %d", epoch, c.RandomPhase[epoch])
+			logger.Debug.Printf("stopProtocol is begining epoch is %d phase is %d", epoch, c.RandomPhase[epoch])
 			return true
 		} else {
 			return false
@@ -482,12 +510,13 @@ func (c *Core) stopProtocol(epoch int64, phase int8) bool {
 func (c *Core) Run() {
 	if c.Name < core.NodeID(c.Parameters.Faults) {
 		logger.Debug.Printf("Node %d is faulty\n", c.Name)
-		c.initStopCore(c.Epoch)
-		if c.stopProtocol(c.Epoch, STOP0) {
-			logger.Info.Printf("c.stopProtocol(m.Epoch, STOP0\n")
-			//c.advanceNextEpoch(c.Epoch+1, crypto.Digest{})
-			return
-		}
+		return
+		// c.initStopCore(c.Epoch)
+		// if c.stopProtocol(c.Epoch, STOP0) {
+		// 	logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+		// 	//c.advanceNextEpoch(c.Epoch+1, crypto.Digest{})
+		// 	return
+		// }
 	}
 	//first proposal
 	block := c.generatorBlock(c.Epoch, crypto.Digest{})

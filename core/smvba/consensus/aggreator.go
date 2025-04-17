@@ -62,8 +62,13 @@ func (e *qcAggreator) Append(committee core.Committee, sigService *crypto.SigSer
 	e.Authors[v.Author] = struct{}{}
 	e.shares = append(e.shares, v.Signature)
 	if len(e.shares) == committee.HightThreshold() {
-		qcvalue, err := crypto.CombineIntactTSPartial(e.shares, sigService.ShareKey, v.Hash())
-		return true, qcvalue, err
+		//qcvalue, err := crypto.CombineIntactTSPartial(e.shares, sigService.ShareKey, v.Hash())
+		var result []byte
+		for _, item := range e.shares {
+			result = append(result, item.PartialSig...)
+		}
+		//return true, qcvalue, err
+		return true, result, nil
 	}
 	return false, nil, nil
 
