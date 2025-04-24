@@ -41,6 +41,8 @@ func (c *Committor) run() {
 	for block := range c.commitCh {
 		if block.Batch.ID != -1 {
 			logger.Info.Printf("commit Block epoch %d node %d batch_id %d\n", block.Epoch, block.Proposer, block.Batch.ID)
+		} else {
+			logger.Info.Printf("commit null Block epoch %d node %d batch_id %d\n", block.Epoch, block.Proposer, block.Batch.ID)
 		}
 		c.callBack <- struct{}{}
 	}

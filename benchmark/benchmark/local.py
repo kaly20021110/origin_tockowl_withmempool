@@ -1,6 +1,7 @@
 import subprocess
 from math import ceil
 from os.path import basename, join, splitext
+import os
 from time import sleep
 
 from benchmark.commands import CommandMaker
@@ -126,8 +127,30 @@ class LocalBench:
                 self.node_parameters.faults,
                 self.ts
             )
-            #os.makedirs(PathMaker.results_path(self.ts), exist_ok=True)
+            outputlatency_file0 = PathMaker.latency_file(
+                "commit",
+                nodes,
+                rate,
+                self.node_parameters.tx_size,
+                batch_size,
+                self.node_parameters.faults,
+                self.ts
+            )
+            outputlatency_file1 = PathMaker.latency_file(
+                "endtoend",
+                nodes,
+                rate,
+                self.node_parameters.tx_size,
+                batch_size,
+                self.node_parameters.faults,
+                self.ts
+            )
+            os.makedirs(PathMaker.results_path(self.ts), exist_ok=True)
             log_parser.print(output_file)
+            os.makedirs(os.path.dirname(outputlatency_file0), exist_ok=True)
+            os.makedirs(os.path.dirname(outputlatency_file1), exist_ok=True)
+            log_parser.printfail_commit_latency(outputlatency_file0)
+            log_parser.printfail_end_to_end_latency(outputlatency_file1)
             return log_parser
             # return LogParser.process(
             #     PathMaker.logs_path(self.ts), 

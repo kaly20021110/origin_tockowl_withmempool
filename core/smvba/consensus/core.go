@@ -270,7 +270,6 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 		}
 	}
 	c.Stopmu.RUnlock()
-	//logger.Warn.Printf("epoch is %d len of V %d len of Q1 %d len of Q2 %d len 0f Q3 %d\n", p.Epoch, len(c.VSet[p.Epoch]), len(c.Q1Set[p.Epoch]), len(c.Q2Set[p.Epoch]), len(c.Q3Set[p.Epoch]))
 	go c.getCBCInstance(p.Epoch, p.Author).ProcessProposal(p)
 	return nil
 }
@@ -336,24 +335,28 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 				if bestv.BestNode == core.NONE {
 					bestv.BestNode = node
 					bestv.BestIndex = i
+					bestv.BestQC = c.getCBCInstance(e.Epoch, node).blockHash
 				}
 			}
 			if _, ok := c.Q1Set[e.Epoch][node]; ok {
 				if bestq1.BestNode == core.NONE {
 					bestq1.BestNode = node
 					bestq1.BestIndex = i
+					bestq1.BestQC = c.getCBCInstance(e.Epoch, node).blockHash
 				}
 			}
 			if _, ok := c.Q2Set[e.Epoch][node]; ok {
 				if bestq2.BestNode == core.NONE {
 					bestq2.BestNode = node
 					bestq2.BestIndex = i
+					bestq2.BestQC = c.getCBCInstance(e.Epoch, node).blockHash
 				}
 			}
 			if _, ok := c.Q3Set[e.Epoch][node]; ok {
 				if bestq3.BestNode == core.NONE {
 					bestq3.BestNode = node
 					bestq3.BestIndex = i
+					bestq3.BestQC = c.getCBCInstance(e.Epoch, node).blockHash
 				}
 			}
 			c.mSet.RUnlock()
@@ -426,7 +429,8 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 		} else {
 			logger.Info.Printf("can not commit any blocks in this epoch %d\n", m.Epoch)
 		}
-		//进入下一个epoch
+		//进入下一个epoch 这个地方可能是空值会有问题,还没想好怎么处理这个bug，其实本质就是没有收到所有的块（所以检索的过程需要做完）
+		//prehash :=
 		prehash := c.getCBCInstance(m.Epoch, bestq1Node).blockHash
 		c.advanceNextEpoch(m.Epoch+1, *prehash)
 	}
@@ -442,10 +446,10 @@ func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *Block) {
 		if block, err := c.getBlock(blockmap[i]); err == nil {
 			logger.Debug.Printf("success get the ancestors epoch %d \n", i)
 			c.Commitor.Commit(block)
-		} else {
+		} else { //这里可能要写一个获取的方法，如果实在是拿不到相关的值的话，需要手动去拿
 			logger.Debug.Printf("error get the ancestors epoch %d \n", i)
 			logger.Error.Printf("error get the ancestors epoch %d \n", i)
-			//c.Commitor.Commit(block)
+
 		}
 	}
 }
@@ -465,12 +469,14 @@ func (c *Core) advanceNextEpoch(epoch int64, prehash crypto.Digest) {
 	c.Stopstate = false
 	c.Epoch = epoch
 	c.NewSet(c.Epoch)
-	c.initStopCore(c.Epoch)
-	if c.stopProtocol(c.Epoch, STOP0) {
-		logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
-		c.Stopstate = true
-		//c.advanceNextEpoch(epoch+1, crypto.Digest{})
-		return
+	if c.Name < core.NodeID(c.Parameters.Faults) {
+		c.initStopCore(c.Epoch)
+		if c.stopProtocol(c.Epoch, STOP0) {
+			logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+			c.Stopstate = true
+			//c.advanceNextEpoch(epoch+1, crypto.Digest{})
+			return
+		}
 	}
 	block := c.generatorBlock(epoch, prehash)
 	proposal, _ := NewCBCProposal(c.Name, c.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[epoch-1], nil, c.SigService)
@@ -509,14 +515,14 @@ func (c *Core) stopProtocol(epoch int64, phase int8) bool {
 
 func (c *Core) Run() {
 	if c.Name < core.NodeID(c.Parameters.Faults) {
-		logger.Debug.Printf("Node %d is faulty\n", c.Name)
-		return
-		// c.initStopCore(c.Epoch)
-		// if c.stopProtocol(c.Epoch, STOP0) {
-		// 	logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
-		// 	//c.advanceNextEpoch(c.Epoch+1, crypto.Digest{})
-		// 	return
-		// }
+		// logger.Debug.Printf("Node %d is faulty\n", c.Name)
+		// return
+		c.initStopCore(c.Epoch)
+		if c.stopProtocol(c.Epoch, STOP0) {
+			logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+			c.advanceNextEpoch(c.Epoch+1, crypto.Digest{})
+			return
+		}
 	}
 	//first proposal
 	block := c.generatorBlock(c.Epoch, crypto.Digest{})
@@ -550,7 +556,6 @@ func (c *Core) Run() {
 					err = c.handleElectShare(msg.(*ElectShare))
 				case BestMsgType:
 					err = c.handleBestMsg(msg.(*BestMsg))
-
 				}
 			}
 		default:

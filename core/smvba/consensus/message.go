@@ -269,8 +269,7 @@ type QuorumCert struct {
 	node          core.NodeID
 	//Signature crypto.Signature
 }
-
-type BestMessage struct {
+type BestMessage struct { //本质上应该带一个QC证明
 	BestNode  core.NodeID
 	BestIndex int
 	BestQC    *crypto.Digest //this maybe nil

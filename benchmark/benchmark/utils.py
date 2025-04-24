@@ -72,6 +72,16 @@ class PathMaker:
         return join(
             PathMaker.results_path(ts), f'bench-{nodes}-{rate}-{tx_size}-{batch_size}-{faults}.txt'
         )
+    @staticmethod
+    def latency_path(ts):
+        assert isinstance(ts, str)
+        return f'latencys/{ts}'
+
+    @staticmethod
+    def latency_file(sign,nodes, rate, tx_size, batch_size ,faults,ts):
+        return join(
+            PathMaker.latency_path(ts), f'locallatency-{sign}-{nodes}-{rate}-{tx_size}-{batch_size}-{faults}.txt'
+        )
 
 
 class Color:

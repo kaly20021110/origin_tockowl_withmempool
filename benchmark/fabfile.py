@@ -131,7 +131,7 @@ def remote(ctx):
             "ddos": False,              # DDOS attack
             "faults": 2,                # the number of byzantine node
             "retry_delay": 5_000,        # request block period
-            'protocol': "vaba"
+            'protocol': "sMVBA"
         }
     }
     try:
