@@ -3,9 +3,8 @@ from glob import glob
 from multiprocessing import Pool
 from os.path import join
 from re import findall, search
-from statistics import mean,variance
+from statistics import mean
 import matplotlib.pyplot as plt
-import os
 
 from benchmark.utils import Print
 
@@ -295,31 +294,86 @@ class LogParser:
         )
     def fail_commit_latency(self):
         latencies = []
-        failed_epochs = {id for id in self.nocounts}
+        fail_epochs = {id for id in self.nocounts}
 
         for batch_id, create_time in self.proposals.items():
             epoch = self.commit_epoch_batchid.get(batch_id)
-            if epoch in failed_epochs and batch_id in self.commits:
+            if epoch not in fail_epochs and batch_id in self.commits:
                 commit_time = self.commits[batch_id]
-                latency = commit_time - create_time
-                latencies.append((int(epoch), latency * 1000))  # 转成毫秒
+                latencies+=[(commit_time - create_time)]
+
+        average_latency = mean(latencies) if latencies else 0
+        flatencies = []
+        ffailed_epochs = {id for id in self.nocounts}
+
+        for batch_id, create_time in self.proposals.items():
+            epoch = self.commit_epoch_batchid.get(batch_id)
+            if epoch in ffailed_epochs and batch_id in self.commits:
+                commit_time = self.commits[batch_id]
+                latency = commit_time - create_time -average_latency
+                flatencies.append((int(epoch), latency * 1000))  # 转成毫秒
+        flatencies.sort(key=lambda x: x[0])
+        return "\n".join(f"{epoch} {latency:.3f}" for epoch, latency in flatencies)
+    
+    def normal_commit_latency(self):
+        latencies = []
+        fail_epochs = {id for id in self.nocounts}
+
+        for batch_id, create_time in self.proposals.items():
+            epoch = self.commit_epoch_batchid.get(batch_id)
+            if epoch not in fail_epochs and batch_id in self.commits:
+                commit_time = self.commits[batch_id]
+                latency=(commit_time - create_time)
+                latencies.append((int(epoch), latency * 1000))
+
+        average_latency = mean([lat for _, lat in latencies]) if latencies else 0
+        latencies = [(epoch, latency - average_latency) for epoch, latency in latencies]
         latencies.sort(key=lambda x: x[0])
         return "\n".join(f"{epoch} {latency:.3f}" for epoch, latency in latencies)
-        
-        
-    def fail_end_to_end_latency(self):
+    
+    def normal_end_to_end_latency(self):
         latencies = []
-        failed_epochs = {id for id in self.nocounts}
+        fail_epochs = {id for id in self.nocounts}
 
         for batch_id, _ in self.proposals.items():
             epoch = self.commit_epoch_batchid.get(batch_id)
-            if epoch in failed_epochs and batch_id in self.commits:
+            if epoch not in fail_epochs and batch_id in self.commits:
                 commit_time = self.commits[batch_id]
                 if batch_id in self.batchs:
-                    latency = commit_time - self.batchs[batch_id]
-                    latencies.append((int(epoch), latency * 1000))  # 转成毫秒
+                    latency=(commit_time - self.batchs[batch_id])
+                    latencies.append((int(epoch), latency * 1000))
+
+        average_latency = mean([lat for _, lat in latencies]) if latencies else 0
+        latencies = [(epoch, latency - average_latency) for epoch, latency in latencies]
         latencies.sort(key=lambda x: x[0])
         return "\n".join(f"{epoch} {latency:.3f}" for epoch, latency in latencies)
+    
+    def fail_end_to_end_latency(self):
+        latencies = []
+        fail_epochs = {id for id in self.nocounts}
+
+        for batch_id, _ in self.proposals.items():
+            epoch = self.commit_epoch_batchid.get(batch_id)
+            if epoch not in fail_epochs and batch_id in self.commits:
+                commit_time = self.commits[batch_id]
+                if batch_id in self.batchs:
+                    latencies.append((commit_time - self.batchs[batch_id]))
+
+        average_latency = mean(latencies) if latencies else 0
+        
+        
+        flatencies = []
+        ffailed_epochs = {id for id in self.nocounts}
+
+        for batch_id, _ in self.proposals.items():
+            epoch = self.commit_epoch_batchid.get(batch_id)
+            if epoch in ffailed_epochs and batch_id in self.commits:
+                commit_time = self.commits[batch_id]
+                if batch_id in self.batchs:
+                    latency = commit_time - self.batchs[batch_id]-average_latency
+                    flatencies.append((int(epoch), latency * 1000))  # 转成毫秒
+        flatencies.sort(key=lambda x: x[0])
+        return "\n".join(f"{epoch} {latency:.3f}" for epoch, latency in flatencies)
         
         
     def print(self, filename):
@@ -327,15 +381,21 @@ class LogParser:
         with open(filename, 'a') as f:
             f.write(self.result())
     
-    def printfail_commit_latency(self,filename):
-        assert isinstance(filename, str)
-        with open(filename, 'a') as f:
+    def printfail_commit_latency(self,filename1,filename2):
+        assert isinstance(filename1, str)
+        with open(filename1, 'a') as f:
             f.write(self.fail_commit_latency())
+        assert isinstance(filename2, str)
+        with open(filename2, 'a') as f:
+            f.write(self.normal_commit_latency())
             
-    def printfail_end_to_end_latency(self,filename):
-        assert isinstance(filename, str)
-        with open(filename, 'a') as f:
+    def printfail_end_to_end_latency(self,filename1,filename2):
+        assert isinstance(filename1, str)
+        with open(filename1, 'a') as f:
             f.write(self.fail_end_to_end_latency())
+        assert isinstance(filename2, str)
+        with open(filename2, 'a') as f:
+            f.write(self.normal_end_to_end_latency())
 
     @classmethod
     def process(cls, directory, faults=0, protocol="", ddos=False):

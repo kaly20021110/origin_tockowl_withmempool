@@ -1,9 +1,9 @@
 package network
 
 import (
+	"bft/mvba/logger"
 	"encoding/gob"
 	"io"
-	"bft/mvba/logger"
 	"reflect"
 )
 

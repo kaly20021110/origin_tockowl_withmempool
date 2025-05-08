@@ -80,7 +80,7 @@ class PathMaker:
     @staticmethod
     def latency_file(sign,nodes, rate, tx_size, batch_size ,faults,ts):
         return join(
-            PathMaker.latency_path(ts), f'locallatency-{sign}-{nodes}-{rate}-{tx_size}-{batch_size}-{faults}.txt'
+            PathMaker.latency_path(ts), f'locallatency-{sign}-{nodes}-{rate}-{tx_size}-{batch_size}-{faults}.log'
         )
 
 
