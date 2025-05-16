@@ -33,7 +33,8 @@ def local(ctx):
             "ddos": False,              # DDOS attack
             "faults": 0,                # the number of byzantine node
             "retry_delay": 5_000,       # request block period
-            'protocol': "sMVBA"
+            'protocol': "sMVBA",
+            'maxmempoolqueensize':10_000
         }
     }
     try:

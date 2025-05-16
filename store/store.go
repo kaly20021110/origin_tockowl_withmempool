@@ -1,6 +1,8 @@
 package store
 
-import "errors"
+import (
+	"errors"
+)
 
 type DB interface {
 	Put(key []byte, val []byte) error
@@ -14,6 +16,7 @@ var (
 const (
 	READ = iota
 	WRITE
+	NOTIFYREAD
 )
 
 type storeReq struct {
@@ -38,6 +41,7 @@ func NewStore(db DB) *Store {
 		db:    db,
 		reqCh: make(chan *storeReq, 1000),
 	}
+	pending := make(map[string][]*storeReq) //存放等待读取的request
 	go func() {
 		for req := range s.reqCh {
 			switch req.typ {
@@ -46,13 +50,32 @@ func NewStore(db DB) *Store {
 					val, err := s.db.Get(req.key)
 					req.val = val
 					req.err = err
-					req.done()
+					req.Done <- req //提醒说这个请求已经正确存进去了，结束了
 				}
 			case WRITE:
 				{
-					err := s.db.Put(req.key, req.val)
-					req.err = err
-					req.done()
+					//req.err = store.WRITE(req.key, req.val)
+					req.err = s.db.Put(req.key, req.val)
+					req.Done <- req
+					//写进去并且唤醒所有正在等待的人
+					if queue, ok := pending[string(req.key)]; ok { //如果有等待的队列消息
+						for _, r := range queue {
+							r.val = req.val
+							r.Done <- r
+						}
+						delete(pending, string(req.key))
+					}
+				}
+			case NOTIFYREAD:
+				{
+					if val, err := s.db.Get(req.key); err == nil {
+						req.val = val
+						req.Done <- req
+					} else {
+						queue := pending[string(req.key)]
+						queue = append(queue, req)
+						pending[string(req.key)] = queue
+					}
 				}
 			}
 		}
@@ -68,8 +91,8 @@ func (s *Store) Read(key []byte) ([]byte, error) {
 		Done: make(chan *storeReq, 1),
 	}
 	s.reqCh <- req
-	<-req.Done
-	return req.val, req.err
+	resp := <-req.Done
+	return resp.val, resp.err
 }
 
 func (s *Store) Write(key, val []byte) error {
@@ -80,6 +103,17 @@ func (s *Store) Write(key, val []byte) error {
 		Done: make(chan *storeReq, 1),
 	}
 	s.reqCh <- req
-	<-req.Done
-	return req.err
+	resp := <-req.Done
+	return resp.err
+}
+
+func (s *Store) NotifyRead(key []byte) []byte {
+	req := &storeReq{
+		typ:  NOTIFYREAD,
+		key:  key,
+		Done: make(chan *storeReq, 1),
+	}
+	s.reqCh <- req
+	resp := <-req.Done
+	return resp.val
 }

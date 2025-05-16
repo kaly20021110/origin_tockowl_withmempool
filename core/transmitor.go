@@ -1,17 +1,21 @@
 package core
 
 import (
+	"bft/mvba/logger"
 	"bft/mvba/network"
 )
 
 type Messgae interface {
 	MsgType() int
+	Module() string // 返回 "mempool" 或 "consensus"或者connect
 }
 
 type Transmitor struct {
 	sender     *network.Sender
 	receiver   *network.Receiver
-	recvCh     chan Messgae
+	mempoolCh  chan Messgae //mempool内部通道
+	connectCh  chan Messgae //mempool和consensus通信通道
+	recvCh     chan Messgae //consensus通信通道
 	msgCh      chan *network.NetMessage
 	parameters Parameters
 	committee  Committee
@@ -27,6 +31,8 @@ func NewTransmitor(
 	tr := &Transmitor{
 		sender:     sender,
 		receiver:   receiver,
+		mempoolCh:  make(chan Messgae, 1_000),
+		connectCh:  make(chan Messgae, 1_000),
 		recvCh:     make(chan Messgae, 1_000),
 		msgCh:      make(chan *network.NetMessage, 1_000),
 		parameters: parameters,
@@ -41,7 +47,16 @@ func NewTransmitor(
 
 	go func() {
 		for msg := range tr.receiver.RecvChannel() {
-			tr.recvCh <- msg
+			switch msg.Module() {
+			case "mempool":
+				tr.mempoolCh <- msg
+			case "consensus":
+				tr.recvCh <- msg
+			case "connect":
+				tr.recvCh <- msg
+			default:
+				logger.Warn.Printf("Unknown module %s", msg.Module())
+			}
 		}
 	}()
 
@@ -75,7 +90,6 @@ func (tr *Transmitor) Send(from, to NodeID, msg Messgae) error {
 		Msg:     msg,
 		Address: addr,
 	}
-
 	return nil
 }
 
@@ -83,6 +97,14 @@ func (tr *Transmitor) Recv() Messgae {
 	return <-tr.recvCh
 }
 
-func (tr *Transmitor) RecvChannel() chan Messgae {
+func (tr *Transmitor) RecvChannel() chan Messgae { //共识部分的通道
 	return tr.recvCh
+}
+
+func (tr *Transmitor) MempololRecvChannel() chan Messgae { //mempool部分的消息通道
+	return tr.mempoolCh
+}
+
+func (tr *Transmitor) ConnectRecvChannel() chan Messgae { //mempool部分的消息通道
+	return tr.connectCh
 }

@@ -127,48 +127,8 @@ class LocalBench:
                 self.node_parameters.faults,
                 self.ts
             )
-            normaloutputlatency_file0 = PathMaker.latency_file(
-                "normalcommit",
-                nodes,
-                rate,
-                self.node_parameters.tx_size,
-                batch_size,
-                self.node_parameters.faults,
-                self.ts
-            )
-            failoutputlatency_file0 = PathMaker.latency_file(
-                "failcommit",
-                nodes,
-                rate,
-                self.node_parameters.tx_size,
-                batch_size,
-                self.node_parameters.faults,
-                self.ts
-            )
-            normaloutputlatency_file1 = PathMaker.latency_file(
-                "normalendtoend",
-                nodes,
-                rate,
-                self.node_parameters.tx_size,
-                batch_size,
-                self.node_parameters.faults,
-                self.ts
-            )
-            failoutputlatency_file1 = PathMaker.latency_file(
-                "failendtoend",
-                nodes,
-                rate,
-                self.node_parameters.tx_size,
-                batch_size,
-                self.node_parameters.faults,
-                self.ts
-            )
             os.makedirs(PathMaker.results_path(self.ts), exist_ok=True)
             log_parser.print(output_file)
-            os.makedirs(os.path.dirname(normaloutputlatency_file0), exist_ok=True)
-            os.makedirs(os.path.dirname(normaloutputlatency_file1), exist_ok=True)
-            log_parser.printfail_commit_latency(failoutputlatency_file0,normaloutputlatency_file0)
-            log_parser.printfail_end_to_end_latency(failoutputlatency_file1,normaloutputlatency_file1)
             return log_parser
             # return LogParser.process(
             #     PathMaker.logs_path(self.ts), 

@@ -14,4 +14,12 @@ var (
 	ErrOneMoreMessage = func(msgTyp int, epoch, round int64, author NodeID) error {
 		return fmt.Errorf("[type-%d-epoch-%d-round-%d] receive one more message from %d ", msgTyp, epoch, round, author)
 	}
+
+	ErrFullMemory = func(author NodeID) error {
+		return fmt.Errorf("author %d Mempool memory is full", author)
+	}
+
+	ErrStoreNotExist = func() error {
+		return fmt.Errorf("storeNotExist")
+	}
 )

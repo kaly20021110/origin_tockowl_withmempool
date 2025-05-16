@@ -4,6 +4,7 @@ import (
 	"bft/mvba/core"
 	"bft/mvba/crypto"
 	"bft/mvba/logger"
+	"bft/mvba/mempool"
 	"bft/mvba/network"
 	"bft/mvba/pool"
 	"bft/mvba/store"
@@ -40,7 +41,7 @@ func Consensus(
 
 	//step1 .Invoke networl
 	addr := fmt.Sprintf(":%s", strings.Split(committee.Address(id), ":")[1])
-	cc := network.NewCodec(DefaultMessageTypeMap)
+	cc := network.NewCodec(DefaultMessageTypeMap, mempool.DefaultMessageTypeMap) //消息类型注册表
 	sender := network.NewSender(cc)
 	go sender.Run()
 	receiver := network.NewReceiver(addr, cc)

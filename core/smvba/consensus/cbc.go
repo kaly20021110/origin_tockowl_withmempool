@@ -73,15 +73,10 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 	switch proposal.Phase {
 	case CBC_ONE_PHASE:
 		{
-			// if proposal.Author != p.Proposer {
-			// 	logger.Warn.Printf("promote error: the proposer of block is not match\n")
-			// 	return
-			// }
 			p.mHash.Lock()
 			d := proposal.B.Hash()
 			p.blockHash = &d
 			p.mHash.Unlock()
-
 			p.mUnhandle.Lock()
 			for _, item := range p.unhandleProposal {
 				go p.ProcessProposal(item)
@@ -91,11 +86,11 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 				go p.ProcessVote(vote)
 			}
 			p.mUnhandle.Unlock()
-
 			vote, _ = NewCBCVote(p.C.Name, p.Proposer, d, p.Epoch, CBC_ONE_PHASE, p.C.SigService)
 		}
 	case CBC_TWO_PHASE:
 		{
+			//*p.blockHash这个值可能为空会导致结果有问题
 			p.keyFlag.Store(true)
 			vote, _ = NewCBCVote(p.C.Name, p.Proposer, *p.blockHash, p.Epoch, CBC_TWO_PHASE, p.C.SigService)
 		}
@@ -106,10 +101,8 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 		}
 	case LAST:
 		{
-			logger.Warn.Printf("enter the handleproposal with LAST epoch is %d\n", p.Epoch)
 			if !p.IsFinish() { //只发送一次electshare
 				if p.C.AchieveFinish(p.Epoch) {
-					logger.Debug.Printf("finish the three-phase broadcast and beigin to achieve finish in epoch %d\n", p.Epoch)
 					p.finishFlag.Store(true)
 					share, _ := NewElectShare(p.C.Name, p.Epoch, p.C.SigService)
 					p.C.Transimtor.Send(p.C.Name, core.NONE, share)
@@ -118,6 +111,15 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 			}
 		}
 	}
+	//任何时候都可以发送选举消息，因为接收消息的时间顺序不一样
+	// if !p.IsFinish() { //只发送一次electshare
+	// 	if p.C.AchieveFinish(p.Epoch) {
+	// 		p.finishFlag.Store(true)
+	// 		share, _ := NewElectShare(p.C.Name, p.Epoch, p.C.SigService)
+	// 		p.C.Transimtor.Send(p.C.Name, core.NONE, share)
+	// 		p.C.Transimtor.RecvChannel() <- share
+	// 	}
+	// }
 	if proposal.Phase != LAST {
 		if p.C.Name != p.Proposer {
 			p.C.Transimtor.Send(p.C.Name, p.Proposer, vote)
@@ -149,38 +151,21 @@ func (p *Promote) ProcessVote(vote *CBCVote) {
 	p.mHash.RUnlock()
 
 	p.mVoteCnt.Lock()
-	//p.voteCnts[vote.Phase]++
-	//nums := p.voteCnts[vote.Phase]
 	finish, qcvalue, _ := p.C.Aggreator.addVote(vote)
 	p.mVoteCnt.Unlock()
 	if finish {
 		if vote.Phase < CBC_THREE_PHASE {
 			QC := QuorumCert{vote.Epoch, -1, core.NONE}
 			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, qcvalue, p.C.SigService)
-			//proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
 			p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
 			p.C.Transimtor.RecvChannel() <- proposal
 		} else {
 			QC := QuorumCert{vote.Epoch, -1, core.NONE}
 			proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, LAST, nil, QC, qcvalue, p.C.SigService)
-			///proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
 			p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
 			p.C.Transimtor.RecvChannel() <- proposal
 		}
 	}
-	// if nums == p.C.Committee.HightThreshold() {
-	// 	if vote.Phase < CBC_THREE_PHASE {
-	// 		QC := QuorumCert{vote.Epoch, -1, core.NONE}
-	// 		proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, vote.Phase+1, nil, QC, p.C.SigService)
-	// 		p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
-	// 		p.C.Transimtor.RecvChannel() <- proposal
-	// 	} else {
-	// 		QC := QuorumCert{vote.Epoch, -1, core.NONE}
-	// 		proposal, _ := NewCBCProposal(p.Proposer, p.Epoch, LAST, nil, QC, p.C.SigService)
-	// 		p.C.Transimtor.Send(p.Proposer, core.NONE, proposal)
-	// 		p.C.Transimtor.RecvChannel() <- proposal
-	// 	}
-	// }
 }
 
 func (p *Promote) BlockHash() *crypto.Digest {

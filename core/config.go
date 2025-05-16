@@ -10,23 +10,25 @@ const (
 )
 
 type Parameters struct {
-	SyncTimeout   int  `json:"sync_timeout"`
-	NetwrokDelay  int  `json:"network_delay"`
-	MinBlockDelay int  `json:"min_block_delay"`
-	DDos          bool `json:"ddos"`
-	Faults        int  `json:"faults"`
-	RetryDelay    int  `json:"retry_delay"`
-	Protocol      int  `json:"protocol"`
+	SyncTimeout         int    `json:"sync_timeout"`
+	NetwrokDelay        int    `json:"network_delay"`
+	MinBlockDelay       int    `json:"min_block_delay"`
+	DDos                bool   `json:"ddos"`
+	Faults              int    `json:"faults"`
+	RetryDelay          int    `json:"retry_delay"`
+	Protocol            int    `json:"protocol"`
+	MaxMempoolQueenSize uint64 `json:"maxmempoolqueensize"`
 }
 
 var DefaultParameters = Parameters{
-	SyncTimeout:   500,
-	NetwrokDelay:  2_000,
-	MinBlockDelay: 0,
-	DDos:          false,
-	Faults:        0,
-	RetryDelay:    5_000,
-	Protocol:      SMVBA,
+	SyncTimeout:         500,
+	NetwrokDelay:        2_000,
+	MinBlockDelay:       0,
+	DDos:                false,
+	Faults:              0,
+	RetryDelay:          5_000,
+	Protocol:            SMVBA,
+	MaxMempoolQueenSize: 10_000,
 }
 
 type NodeID int

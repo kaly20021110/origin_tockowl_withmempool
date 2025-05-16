@@ -66,7 +66,7 @@ func (s *Sender) connect(addr string) (chan<- Messgae, error) {
 			if err := cc.Write(msg); err != nil {
 				logger.Warn.Printf("Failed to send message to %s: %v \n", addr, err)
 			} else {
-				logger.Debug.Printf("Successfully sent message to %s \n", addr)
+				//logger.Debug.Printf("Successfully sent message to %s \n", addr)
 			}
 		}
 	}()
@@ -113,7 +113,7 @@ func (recv *Receiver) serveConn(conn net.Conn) {
 	cc := recv.cc.Bind(conn)
 	for {
 		if msg, err := cc.Read(); err != nil {
-			// logger.Debug.Printf("Received %v", msg)
+			// logger.Debug.Printf("Received %v", err)
 			if err != io.EOF {
 				logger.Warn.Printf("failed to receive : %v \n", err)
 			}
