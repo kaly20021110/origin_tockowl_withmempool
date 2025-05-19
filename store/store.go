@@ -27,9 +27,9 @@ type storeReq struct {
 	Done chan *storeReq
 }
 
-func (r *storeReq) done() {
-	r.Done <- r
-}
+// func (r *storeReq) done() {
+// 	r.Done <- r
+// }
 
 type Store struct {
 	db    DB

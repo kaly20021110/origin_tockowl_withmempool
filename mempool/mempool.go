@@ -98,11 +98,11 @@ func (m *Mempool) HandleOwnBlock(block *OwnBlockMsg) error {
 	if uint64(len(m.Queue)) >= m.Parameters.MaxMempoolQueenSize {
 		return core.ErrFullMemory(m.Name)
 	}
-	//digest := block.Block.Hash()
+	digest := block.Block.Hash()
 	if err := m.payloadProcess(block.Block); err != nil {
 		return err
 	}
-	//m.Queue[digest] = struct{}{}
+	m.Queue[digest] = struct{}{}
 	return nil
 }
 
@@ -189,23 +189,31 @@ func (m *Mempool) HandleVerifyMsg(msg *VerifyBlockMsg) VerifyStatus {
 }
 
 func (m *Mempool) generateBlocks() error {
-	for {
-		block, _ := NewBlock(m.Name, m.TxPool.GetBatch(), m.SigService)
-		if block.Batch.ID != -1 {
-			logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
-			ownmessage := &OwnBlockMsg{
-				Block: block,
-			}
-			m.Transimtor.MempololRecvChannel() <- ownmessage
-			break
+	block, _ := NewBlock(m.Name, m.TxPool.GetBatch(), m.SigService)
+	if block.Batch.ID != -1 {
+		logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
+		ownmessage := &OwnBlockMsg{
+			Block: block,
 		}
+		m.Transimtor.MempololRecvChannel() <- ownmessage
 	}
+	// for {
+	// 	block, _ := NewBlock(m.Name, m.TxPool.GetBatch(), m.SigService)
+	// 	if block.Batch.ID != -1 {
+	// 		logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
+	// 		ownmessage := &OwnBlockMsg{
+	// 			Block: block,
+	// 		}
+	// 		m.Transimtor.MempololRecvChannel() <- ownmessage
+	// 		break
+	// 	}
+	// }
 	return nil
 }
 
 func (m *Mempool) Run() {
 	//一直广播微区块
-	ticker := time.NewTicker(30 * time.Millisecond)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	m.generateBlocks()
 

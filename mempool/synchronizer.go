@@ -91,8 +91,6 @@ func (sync *Synchronizer) Run() {
 					//找作者要相关的区块
 					sync.Transimtor.Send(sync.Name, req.Author, message)
 
-					//找所有人要
-					//sync.Transimtor.Send(sync.Name, core.NONE, message)
 				case SyncCleanUpBlockType:
 					req, _ := reqMsg.(*SyncCleanUpBlockMsg)
 					var keys []crypto.Digest
