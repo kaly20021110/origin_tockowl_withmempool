@@ -7,6 +7,7 @@ from benchmark.logs import ParseError, LogParser
 from benchmark.utils import BenchError,Print
 from aws.instance import InstanceManager
 from aws.remote import Bench
+import os
 
 @task
 def local(ctx):
@@ -14,7 +15,7 @@ def local(ctx):
     bench_params = {
         'nodes': 4,
         'duration': 30,
-        'rate': 5_000,                  # tx send rate
+        'rate': 10_000,                  # tx send rate
         'batch_size': 200,              # the max number of tx that can be hold 
         'log_level': 0b1111,            # 0x1 infolevel 0x2 debuglevel 0x4 warnlevel 0x8 errorlevel
         'protocol': "sMVBA"
@@ -40,6 +41,7 @@ def local(ctx):
     try:
         ret = LocalBench(bench_params, node_params).run(debug=True).result()
         print(ret)
+
     except BenchError as e:
         Print.error(e)
 

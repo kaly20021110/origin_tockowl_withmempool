@@ -129,6 +129,7 @@ func (r *Retriever) run() {
 }
 
 func (r *Retriever) requestBlocks(digest crypto.Digest, nodeid core.NodeID, backBlock crypto.Digest) {
+	logger.Info.Printf("begin to go retriever\n")
 	req := &reqRetrieve{
 		typ:       ReqType,
 		digest:    digest,

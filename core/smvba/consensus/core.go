@@ -27,11 +27,11 @@ type Core struct {
 	loopBackChannel      chan crypto.Digest //从retrieval部分获取到区块之后，直接commit
 	BlockloopBackChannel chan *ConsensusBlock
 
-	CBCInstances map[int64]map[core.NodeID]*Promote //map[epoch][core.NodeID]
-	//CBCInstancesBlockHash map[int64]map[core.NodeID]crypto.Digest //存储每个块的哈希值
-	BlocksWaitforCommit     map[int64]*ConsensusBlock      //等待提交区块
-	BlocksWaitforCommitFlag map[int64]struct{}             //用于标识这个epoch需要被commit
-	VSet                    map[int64]map[core.NodeID]bool //index standfor the QC and proposal
+	CBCInstances            map[int64]map[core.NodeID]*Promote      //map[epoch][core.NodeID]
+	CBCInstancesBlockHash   map[int64]map[core.NodeID]crypto.Digest //存储每个块的哈希值
+	BlocksWaitforCommit     map[int64]*ConsensusBlock               //等待提交区块
+	BlocksWaitforCommitFlag map[int64]core.NodeID                   //用于标识这个epoch需要被commit
+	VSet                    map[int64]map[core.NodeID]bool          //index standfor the QC and proposal
 	Q1Set                   map[int64]map[core.NodeID]bool
 	Q2Set                   map[int64]map[core.NodeID]bool
 	Q3Set                   map[int64]map[core.NodeID]bool
@@ -44,7 +44,8 @@ type Core struct {
 	StopFlag                map[int64]map[core.NodeID]struct{} //用于停止前面的广播过程
 	Stopmu                  sync.RWMutex
 
-	mSet sync.RWMutex
+	mSet          sync.RWMutex
+	blockhashlock sync.RWMutex
 }
 
 func NewCore(
@@ -61,27 +62,27 @@ func NewCore(
 	BlockloopBackChannel := make(chan *ConsensusBlock)
 	Sync := mempool.NewSynchronizer(Name, Transimtor, loopBackchannel, Store)
 	c := &Core{
-		Name:                 Name,
-		Committee:            Committee,
-		Parameters:           Parameters,
-		SigService:           SigService,
-		Store:                Store,
-		TxPool:               TxPool,
-		Transimtor:           Transimtor,
-		Epoch:                0,
-		CommitEpoch:          0,
-		Stopstate:            false,
-		Aggreator:            NewAggreator(SigService, Committee),
-		Elector:              NewElector(SigService, Committee),
-		Commitor:             NewCommittor(Store, callBack),
-		Retriever:            NewRetriever(Name, Store, Transimtor, SigService, Parameters, BlockloopBackChannel), //这个地方应该也把consensu的区块检索得到
-		MemPool:              mempool.NewMempool(Name, Committee, Parameters, SigService, Store, TxPool, Transimtor, Sync),
-		loopBackChannel:      loopBackchannel,
-		BlockloopBackChannel: BlockloopBackChannel,
-		CBCInstances:         make(map[int64]map[core.NodeID]*Promote),
-		//CBCInstancesBlockHash: make(map[int64]map[core.NodeID]crypto.Digest),
+		Name:                    Name,
+		Committee:               Committee,
+		Parameters:              Parameters,
+		SigService:              SigService,
+		Store:                   Store,
+		TxPool:                  TxPool,
+		Transimtor:              Transimtor,
+		Epoch:                   0,
+		CommitEpoch:             0,
+		Stopstate:               false,
+		Aggreator:               NewAggreator(SigService, Committee),
+		Elector:                 NewElector(SigService, Committee),
+		Commitor:                NewCommittor(Store, callBack),
+		Retriever:               NewRetriever(Name, Store, Transimtor, SigService, Parameters, BlockloopBackChannel), //这个地方应该也把consensu的区块检索得到
+		MemPool:                 mempool.NewMempool(Name, Committee, Parameters, SigService, Store, TxPool, Transimtor, Sync),
+		loopBackChannel:         loopBackchannel,
+		BlockloopBackChannel:    BlockloopBackChannel,
+		CBCInstances:            make(map[int64]map[core.NodeID]*Promote),
+		CBCInstancesBlockHash:   make(map[int64]map[core.NodeID]crypto.Digest),
 		BlocksWaitforCommit:     make(map[int64]*ConsensusBlock),
-		BlocksWaitforCommitFlag: make(map[int64]struct{}),
+		BlocksWaitforCommitFlag: make(map[int64]core.NodeID),
 		VSet:                    make(map[int64]map[core.NodeID]bool),
 		Q1Set:                   make(map[int64]map[core.NodeID]bool),
 		Q2Set:                   make(map[int64]map[core.NodeID]bool),
@@ -92,6 +93,31 @@ func NewCore(
 		StopFlag:                make(map[int64]map[core.NodeID]struct{}),
 	}
 	return c
+}
+
+func (c *Core) AddCBCBlockHash(epoch int64, node core.NodeID, digest crypto.Digest) {
+	c.blockhashlock.Lock()
+	defer c.blockhashlock.Unlock()
+	if _, ok := c.CBCInstancesBlockHash[epoch]; !ok {
+		c.CBCInstancesBlockHash[epoch] = make(map[core.NodeID]crypto.Digest)
+	}
+	if _, exist := c.CBCInstancesBlockHash[epoch][node]; !exist {
+		c.CBCInstancesBlockHash[epoch][node] = digest
+	}
+}
+
+func (c *Core) GetCBCBlockHash(epoch int64, node core.NodeID) (crypto.Digest, bool) {
+	c.blockhashlock.Lock()
+	defer c.blockhashlock.Unlock()
+	if _, ok := c.CBCInstancesBlockHash[epoch]; !ok {
+		c.CBCInstancesBlockHash[epoch] = make(map[core.NodeID]crypto.Digest)
+		return crypto.Digest{}, false
+	}
+	if value, exist := c.CBCInstancesBlockHash[epoch][node]; exist {
+		return value, true
+	} else {
+		return crypto.Digest{}, false
+	}
 }
 
 func (c *Core) AddSet(settype uint8, epoch int64, node core.NodeID) {
@@ -149,7 +175,7 @@ func (c *Core) NewSet(epoch int64) {
 func (c *Core) AchieveFinish(epoch int64) bool {
 	c.mSet.RLock()
 	defer c.mSet.RUnlock()
-	logger.Debug.Printf("len of len(c.VSet[epoch]) %d\n", len(c.VSet[epoch]))
+	logger.Debug.Printf("len of len(c.VSet[epoch]) %d epoch %d\n", len(c.VSet[epoch]), epoch)
 	if len(c.VSet[epoch]) >= c.Committee.HightThreshold() && len(c.Q1Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q2Set[epoch]) >= c.Committee.HightThreshold() && len(c.Q3Set[epoch]) >= c.Committee.HightThreshold() {
 		return true
 	} else {
@@ -210,7 +236,9 @@ func (c *Core) generatorConsensusBlock(epoch int64, prehash crypto.Digest, preno
 	}
 	c.Transimtor.ConnectRecvChannel() <- msg
 	referrences := <-referencechan
+	//这个地方一直没有消息了，导致无法产生共识块
 	consensusblock := NewConsensusBlock(c.Name, epoch, prehash, prenodeid, referrences)
+	logger.Info.Printf("create ConsensusBlock epoch %d proposer %d lens is %d\n", consensusblock.Epoch, consensusblock.Proposer, len(consensusblock.Referrence))
 	logger.Info.Printf("create ConsensusBlock epoch %d proposer %d\n", consensusblock.Epoch, consensusblock.Proposer)
 	return consensusblock
 }
@@ -235,13 +263,34 @@ func (c *Core) verifyConsensusBlock(block *ConsensusBlock) bool {
 	}
 }
 
+// 收到区块之后把区块加入到待commit数组中
+func (c *Core) CheckBlockToCommit(block *ConsensusBlock) error {
+	commitEpoch := c.CommitEpoch
+	for i := commitEpoch; i <= c.Epoch; i++ {
+		if existblock, ok := c.BlocksWaitforCommit[i]; ok {
+			if i == commitEpoch { //不用检查直接提交即可
+				return nil
+			} else {
+				if block.Hash() == existblock.PreHash { //如果等于父亲区块
+					c.CommitAncestor(commitEpoch, block.Epoch, block)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Core) CommitAllBlocks() {
 	commitEpoch := c.CommitEpoch
-	for i := commitEpoch; i < c.Epoch; i++ {
+	for i := commitEpoch; i <= c.Epoch; i++ {
 		if block, ok := c.BlocksWaitforCommit[i]; ok {
-			c.TrytoCommit(block)
-			delete(c.BlocksWaitforCommit, i)
-			c.CommitEpoch++
+			flag := c.TrytoCommit(block)
+			if flag {
+				delete(c.BlocksWaitforCommit, i)
+				c.CommitEpoch++
+			} else {
+				break
+			}
 		} else {
 			break
 		}
@@ -250,11 +299,7 @@ func (c *Core) CommitAllBlocks() {
 
 // 提交所有的祖先区块 从commitepoch to the actual can commit block
 func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *ConsensusBlock) {
-	for j := lastepoch; j <= nowepoch; j++ { //标识这个epoch的块需要被提交了
-		c.BlocksWaitforCommitFlag[j] = struct{}{}
-	}
 	blockmap := make(map[int64]crypto.Digest)
-	flag := true
 	for i := nowepoch - 1; i >= lastepoch; i-- { //获取所有的祖先
 		blockmap[i] = block.PreHash
 		if preblock, err := c.getConsensusBlock(blockmap[i]); err == nil { //获取得到
@@ -265,27 +310,34 @@ func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *ConsensusB
 			//如果通过检索要到了某个区块，那就继续执行等待commit的函数
 			//如果从检索处要到了这个区块，如果区块的epoch大于commitEpoch，就继续检查直到检查到commitEpoch为止
 			//retrieve miss block
-			logger.Info.Printf("commit error and lost blocks and retrieve last miss block in epoch %d\n", block.Epoch)
 			c.Retriever.requestBlocks(block.PreHash, block.Proposer, block.Hash())
 			logger.Error.Printf("Error Reference Author %d Epoch %d\n", block.Proposer, block.Epoch)
-			flag = false
 			break
 		}
-	}
-	if flag {
-		c.CommitAllBlocks()
 	}
 }
 
 // 提交某个共识块
-func (c *Core) TrytoCommit(consensusblock *ConsensusBlock) {
-	logger.Info.Printf("commit ConsensusBlock epoch %d proposer %d\n", consensusblock.Epoch, consensusblock.Proposer)
-	for _, smallblockhash := range consensusblock.Referrence {
-		if smallblock, err := c.MemPool.GetBlock(smallblockhash); err != nil {
-			logger.Error.Printf("get payload error\n") //没拿到所有的区块
-		} else {
-			c.Commitor.Commit(smallblock)
+func (c *Core) TrytoCommit(consensusblock *ConsensusBlock) bool {
+	//张健提了一个建议，是直接先提交某些payload，然后收到之后再提交剩下的payload
+	if ok := c.verifyConsensusBlock(consensusblock); !ok { //verify中已经去要一些区块了
+		logger.Debug.Printf("len of the paylads %d\n", len(consensusblock.Referrence))
+		return false
+	} else {
+		logger.Info.Printf("commit ConsensusBlock epoch %d proposer %d\n", consensusblock.Epoch, consensusblock.Proposer)
+		for _, smallblockhash := range consensusblock.Referrence {
+			if smallblock, err := c.MemPool.GetBlock(smallblockhash); err != nil {
+				logger.Error.Printf("get payload error\n") //没拿到所有的区块
+			} else {
+				c.Commitor.Commit(smallblock)
+			}
 		}
+		msg := &mempool.CleanBlockMsg{
+			Digests: consensusblock.Referrence,
+			Epoch:   consensusblock.Epoch,
+		}
+		c.Transimtor.ConnectRecvChannel() <- msg
+		return true
 	}
 }
 
@@ -305,7 +357,7 @@ func (c *Core) CheckReference(block *ConsensusBlock) (crypto.Digest, bool) {
 func (c *Core) handleProposal(p *CBCProposal) error {
 	logger.Debug.Printf("processing proposal epoch %d phase %d proposer %d\n", p.Epoch, p.Phase, p.Author)
 
-	//ensure all block is received and commit
+	//ensure all block is received and commit 在这一步把所有的待提交的区块提交
 
 	//01 checkEpoch
 	if c.messageFilter(p.Epoch) {
@@ -320,24 +372,16 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 		if err := c.storeConsensusBlock(p.B); err != nil {
 			return err
 		}
-		//ERROR
-		//c.CBCInstancesBlockHash[p.Epoch][p.B.Proposer] = p.B.Hash() //存储哈希值
-
 		if p.Epoch == c.Epoch && p.ParentQC1.Priorityindex > c.ParentQ2[p.Epoch-1].Priorityindex && p.Epoch != 0 {
-			logger.Info.Printf("the block is a wrong block in epoch %d\n", p.Epoch)
 			return nil
 		}
-		if ok := c.verifyConsensusBlock(p.B); !ok {
-			logger.Debug.Printf("checkreferrence error and try to retriver Author %d Epoch %d lenof Reference %d\n", p.Author, p.Epoch, len(p.B.Referrence))
-			//向mempool要所有的微区块
-			message := &mempool.RequestBlockMsg{
-				Type:    0,
-				Digests: p.B.Referrence,
-				Author:  c.Name,
-			}
-			c.Transimtor.ConnectRecvChannel() <- message
-			return nil
-		}
+
+		//这里为什么会出现要不到的情况呢？
+		// if ok := c.verifyConsensusBlock(p.B); !ok {
+		// 	logger.Info.Printf("payloads missing and ask mempool to get in Epoch %d\n", p.Epoch)
+		// 	logger.Debug.Printf("checkreferrence error and try to retriver Author %d Epoch %d lenof Reference %d\n", p.Author, p.Epoch, len(p.B.Referrence))
+		// 	return nil
+		// }
 		if miss, ok := c.CheckReference(p.B); !ok {
 			//retrieve miss block
 			logger.Info.Printf("retrieve last miss block in epoch %d\n", p.Epoch)
@@ -353,6 +397,9 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 		return nil
 	}
 	c.AddSet(uint8(p.Phase), p.Epoch, p.Author)
+	if p.Phase == CBC_ONE_PHASE {
+		c.AddCBCBlockHash(p.Epoch, p.Author, p.B.Hash())
+	}
 	//不能对这个值进行投票了，更新完set之后不对相应的题案进行投票了
 	c.Stopmu.RLock()
 	if _, oks := c.StopFlag[p.Epoch]; oks {
@@ -407,6 +454,7 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 	if leadermap, err := c.Elector.AddShareVote(e); err != nil {
 		return err
 	} else if leadermap[0] != -1 { //已经形成了优先级序列
+		//logger.Warn.Printf("handle electshare ready in epoch %d author epoch %d\n", e.Epoch, c.Epoch)
 		c.Stopmu.Lock()
 		_, ok := c.StopFlag[e.Epoch]
 		if !ok {
@@ -426,8 +474,13 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 					bestv.BestNode = node
 					bestv.BestIndex = i
 					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					bestv.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
-					//bestv.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
+					//bestv.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
+					if exist {
+						bestv.BestQC = blockhash
+					} else {
+						//must exist
+					}
 				}
 			}
 			if _, ok := c.Q1Set[e.Epoch][node]; ok {
@@ -436,7 +489,13 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 					bestq1.BestIndex = i
 					//bestq1.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
 					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					bestq1.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					//bestq1.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
+					if exist {
+						bestq1.BestQC = blockhash
+					} else {
+						//must exist
+					}
 				}
 			}
 			if _, ok := c.Q2Set[e.Epoch][node]; ok {
@@ -445,7 +504,13 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 					bestq2.BestIndex = i
 					//bestq2.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
 					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					bestq2.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					//bestq2.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
+					if exist {
+						bestq2.BestQC = blockhash
+					} else {
+						//must exist
+					}
 				}
 			}
 			if _, ok := c.Q3Set[e.Epoch][node]; ok {
@@ -453,7 +518,13 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 					bestq3.BestNode = node
 					bestq3.BestIndex = i
 					//bestq3.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
-					bestq3.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					//bestq3.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
+					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
+					if exist {
+						bestq3.BestQC = blockhash
+					} else {
+						//must exist
+					}
 				}
 			}
 			c.mSet.RUnlock()
@@ -479,10 +550,10 @@ func (c *Core) Best(epoch int64, set map[int64]map[core.NodeID]bool) (int, core.
 }
 
 func (c *Core) handleBestMsg(m *BestMsg) error {
-	logger.Debug.Printf("processing best message epoch %d author %d\n", m.Epoch, m.Author)
 	if c.messageFilter(m.Epoch) {
 		return nil
 	}
+	logger.Debug.Printf("processing best message epoch %d author %d\n", m.Epoch, m.Author)
 	if c.restartProtocol(m.Epoch) {
 		c.advanceNextEpoch(m.Epoch, crypto.Digest{}, core.NONE)
 	}
@@ -491,6 +562,7 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 		return nil
 	}
 	c.AddSet(0, m.Epoch, m.BestV.BestNode)
+	c.AddCBCBlockHash(m.Epoch, m.BestV.BestNode, m.BestV.BestQC)
 	c.AddSet(1, m.Epoch, m.BestQ1.BestNode)
 	c.AddSet(2, m.Epoch, m.BestQ2.BestNode)
 	c.AddSet(3, m.Epoch, m.BestQ3.BestNode)
@@ -498,6 +570,7 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 	if finish, err := c.Aggreator.addBestMessage(m); err != nil {
 		return err
 	} else if finish { //收集到了2f+1条消息
+		//logger.Warn.Printf("handle e2f+1 best messages in epoch %d  author epoch %d\n", m.Epoch, c.Epoch)
 		logger.Debug.Printf("actually recieve 2f+1 best messages epoch %d \n", m.Epoch)
 		//update parents q1 and q2
 		c.mSet.RLock()
@@ -512,12 +585,15 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 		if bestvNode == bestq3Node || bestq3Index == 0 {
 			// if bestvNode == bestq1Node && bestq1Node == bestq2Node && bestq2Node == bestq3Node {
 			logger.Debug.Printf("actually commit blocks epoch %d bestq3index is %d\n", m.Epoch, bestq3Index)
-			blockHash := c.getCBCInstance(m.Epoch, bestq3Node).BlockHash()
-			if blockHash == nil {
-				//根据ID去找别人要区块  找别人要这个区块和这个区块的哈希值,不知道怎么找别人去要这个区块
+			blockHash, exist := c.GetCBCBlockHash(m.Epoch, bestq3Node)
+			//blockHash := c.getCBCInstance(m.Epoch, bestq3Node).BlockHash()
+			if !exist {
+				//Impossible
 				logger.Info.Printf("can commit but has not receive the first proposal\n")
 			} else {
-				if block, err := c.getConsensusBlock(*blockHash); err == nil {
+				if block, err := c.getConsensusBlock(blockHash); err == nil {
+					logger.Info.Printf("can commit and actually commit the blocks\n")
+					c.BlocksWaitforCommit[block.Epoch] = block
 					c.CommitAncestor(c.CommitEpoch, block.Epoch, block)
 					c.CommitAllBlocks()
 				}
@@ -526,13 +602,13 @@ func (c *Core) handleBestMsg(m *BestMsg) error {
 			logger.Info.Printf("can not commit any blocks in this epoch %d\n", m.Epoch)
 		}
 		//获取q1所在块的哈希值
-		prehash := c.getCBCInstance(m.Epoch, bestq1Node).BlockHash()
-		if prehash != nil {
+		//prehash := c.getCBCInstance(m.Epoch, bestq1Node).BlockHash()
+		prehash, preexist := c.GetCBCBlockHash(m.Epoch, bestq1Node)
+		if preexist {
 			logger.Error.Printf("advance next epoch %d with prehash of block %d", m.Epoch+1, bestq1Node)
-			c.advanceNextEpoch(m.Epoch+1, *prehash, bestq1Node)
+			c.advanceNextEpoch(m.Epoch+1, prehash, bestq1Node)
 		} else {
-			//根据ID去找别人要区块  ERROR
-
+			//根据ID去找别人要区块  ERROR impossible must have
 			logger.Error.Printf("the block need to reference has not received\n")
 		}
 	}
@@ -574,10 +650,18 @@ func (c *Core) handleLoopBack(blockhash crypto.Digest) error {
 		logger.Error.Printf("loopback error\n")
 		return err
 	} else {
-		logger.Debug.Printf("procesing block loop back round %d node %d \n", block.Epoch, block.Proposer)
-		proposal, _ := NewCBCProposal(block.Proposer, block.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[block.Epoch-1], nil, c.SigService)
-		c.AddSet(0, proposal.Epoch, proposal.Author)
-		go c.getCBCInstance(proposal.Epoch, proposal.Author).ProcessProposal(proposal)
+		logger.Error.Printf("successfully get the block author %d epoch %d\n", block.Proposer, block.Epoch)
+		if block.Epoch == c.Epoch {
+			logger.Debug.Printf("procesing block loop back Epoch %d node %d \n", block.Epoch, block.Proposer)
+			proposal, _ := NewCBCProposal(block.Proposer, block.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[block.Epoch-1], nil, c.SigService)
+			c.AddSet(0, proposal.Epoch, proposal.Author)
+			c.AddCBCBlockHash(proposal.Epoch, proposal.Author, blockhash)
+			go c.getCBCInstance(proposal.Epoch, proposal.Author).ProcessProposal(proposal)
+		} else {
+			c.CheckBlockToCommit(block)
+			c.CommitAllBlocks()
+		}
+
 	}
 	return nil
 }
@@ -591,9 +675,12 @@ func (c *Core) handleBlockLoopBack(block *ConsensusBlock) error {
 		logger.Debug.Printf("procesing block loop back round %d node %d \n", block.Epoch, block.Proposer)
 		proposal, _ := NewCBCProposal(block.Proposer, block.Epoch, CBC_ONE_PHASE, block, c.ParentQ1[block.Epoch-1], nil, c.SigService)
 		c.AddSet(0, proposal.Epoch, proposal.Author)
+		c.AddCBCBlockHash(proposal.Epoch, proposal.Author, block.Hash())
 		go c.getCBCInstance(proposal.Epoch, proposal.Author).ProcessProposal(proposal)
 	} else {
-		//尝试提交所有的区块
+
+		//尝试提交所有的区块,先更新待提交数组，再提交
+		c.CheckBlockToCommit(block)
 		c.CommitAllBlocks()
 	}
 
