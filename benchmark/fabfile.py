@@ -14,18 +14,18 @@ def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'nodes': 4,
-        'duration': 30,
-        'rate': 10_000,                  # tx send rate
+        'duration': 10,
+        'rate': 5_000,                  # tx send rate
         'batch_size': 200,              # the max number of tx that can be hold 
         'log_level': 0b1111,            # 0x1 infolevel 0x2 debuglevel 0x4 warnlevel 0x8 errorlevel
         'protocol': "sMVBA"
     }
     node_params = {
         "pool": {
-            # "rate": 1_000,              # ignore: tx send rate 
-            "tx_size": 250,               # tx size
+            #"rate": 10_000,              # ignore: tx send rate 
+            "tx_size": 250,               # tx size byte
             # "batch_size": 200,          # ignore: the max number of tx that can be hold 
-            "max_queue_size": 10_000 
+            "max_queue_size": 1_000
 	    },
         "consensus": {
             "sync_timeout": 500,        # node sync time
@@ -35,7 +35,8 @@ def local(ctx):
             "faults": 0,                # the number of byzantine node
             "retry_delay": 5_000,       # request block period
             'protocol': "sMVBA",
-            'maxmempoolqueensize':10_000
+            'maxmempoolqueensize': 100_000,
+            'payload_size': 500
         }
     }
     try:

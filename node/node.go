@@ -49,6 +49,7 @@ func NewNode(
 	}
 
 	poolParameters, coreParameters, err := config.GenParamatersFromFile(parametersFile)
+
 	if err != nil {
 		logger.Error.Println(err)
 		return nil, err

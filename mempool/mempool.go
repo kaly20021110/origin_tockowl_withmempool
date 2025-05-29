@@ -6,19 +6,20 @@ import (
 	"bft/mvba/logger"
 	"bft/mvba/pool"
 	"bft/mvba/store"
-	"time"
 )
 
 type Mempool struct {
-	Name       core.NodeID
-	Committee  core.Committee
-	Parameters core.Parameters
-	SigService *crypto.SigService
-	Store      *store.Store
-	TxPool     *pool.Pool
-	Transimtor *core.Transmitor
-	Queue      map[crypto.Digest]struct{} //整个mempool的最大容量
-	Sync       *Synchronizer
+	Name        core.NodeID
+	Committee   core.Committee
+	Parameters  core.Parameters
+	SigService  *crypto.SigService
+	Store       *store.Store
+	TxPool      *pool.Pool
+	Transimtor  *core.Transmitor
+	Queue       map[crypto.Digest]struct{} //整个mempool的最大容量
+	Sync        *Synchronizer
+	Count       int64
+	CreateCount int64
 	//ConsensusMempoolCoreChan <-chan core.Messgae
 }
 
@@ -34,15 +35,17 @@ func NewMempool(
 	//consensusMempoolCoreChan <-chan core.Messgae,
 ) *Mempool {
 	m := &Mempool{
-		Name:       Name,
-		Committee:  Committee,
-		Parameters: Parameters,
-		SigService: SigService,
-		Store:      Store,
-		TxPool:     TxPool,
-		Transimtor: Transimtor,
-		Queue:      make(map[crypto.Digest]struct{}),
-		Sync:       Sync,
+		Name:        Name,
+		Committee:   Committee,
+		Parameters:  Parameters,
+		SigService:  SigService,
+		Store:       Store,
+		TxPool:      TxPool,
+		Transimtor:  Transimtor,
+		Queue:       make(map[crypto.Digest]struct{}),
+		Sync:        Sync,
+		Count:       0,
+		CreateCount: 0,
 		//ConsensusMempoolCoreChan: consensusMempoolCoreChan,
 	}
 	return m
@@ -102,6 +105,10 @@ func (m *Mempool) HandleOwnBlock(block *OwnBlockMsg) error {
 		return err
 	}
 	m.Queue[digest] = struct{}{}
+	// if block.Block.Batch.ID != -1 {
+	// 	m.Count++
+	// 	logger.Warn.Printf("mempool payload count is %d\n", m.Count)
+	// }
 	return nil
 }
 
@@ -116,7 +123,6 @@ func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 	digest := block.Block.Hash()
 	// Verify that the payload is correctly signed.
 	if flag := block.Block.Verify(m.Committee); !flag {
-		logger.Error.Printf("Block sign error\n")
 		return nil
 	}
 	//如果已经存储了就舍弃
@@ -127,6 +133,12 @@ func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 		return err
 	}
 	m.Queue[digest] = struct{}{}
+
+	if block.Block.Batch.ID != -1 {
+		m.Count++
+		logger.Warn.Printf("mempool payload count is %d\n", m.Count)
+	}
+
 	return nil
 }
 
@@ -139,8 +151,8 @@ func (m *Mempool) HandleRequestBlock(request *RequestBlockMsg) error {
 			message := &OtherBlockMsg{
 				Block: b,
 			}
-			//m.Transimtor.Send(m.Name, request.Author, message) //只发给向自己要的人
-			m.Transimtor.Send(m.Name, core.NONE, message) //发给所有人
+			m.Transimtor.Send(m.Name, request.Author, message) //只发给向自己要的人
+			//m.Transimtor.Send(m.Name, core.NONE, message) //发给所有人
 		}
 	}
 	return nil
@@ -194,10 +206,12 @@ func (m *Mempool) HandleVerifyMsg(msg *VerifyBlockMsg) VerifyStatus {
 	return m.Sync.Verify(msg.Proposer, msg.Epoch, msg.Payloads, msg.ConsensusBlockHash)
 }
 
-func (m *Mempool) generateBlocks() error {
-	block, _ := NewBlock(m.Name, m.TxPool.GetBatch(), m.SigService)
+func (m *Mempool) generateBlocks(batch pool.Batch) error {
+	block, _ := NewBlock(m.Name, batch, m.SigService)
 	if block.Batch.ID != -1 {
 		logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
+		m.CreateCount++
+		logger.Warn.Printf("create payload count is %d\n", m.CreateCount)
 		ownmessage := &OwnBlockMsg{
 			Block: block,
 		}
@@ -207,22 +221,18 @@ func (m *Mempool) generateBlocks() error {
 }
 
 func (m *Mempool) Run() {
-	//一直广播微区块
-	ticker := time.NewTicker(1000 * time.Microsecond)
-	defer ticker.Stop()
-	m.generateBlocks()
 
 	go m.Sync.Run()
 
 	//监听mempool的消息通道
 	mempoolrecvChannal := m.Transimtor.MempololRecvChannel()
 	connectrecvChannal := m.Transimtor.ConnectRecvChannel()
+	batchChannal := m.TxPool.BatchChannel()
 	for {
 		var err error
 		select {
-		case <-ticker.C:
-			logger.Debug.Printf("ticker triggered at %s", time.Now().Format(time.RFC3339Nano))
-			err = m.generateBlocks()
+		case batch := <-batchChannal:
+			err = m.generateBlocks(batch)
 		case msg := <-connectrecvChannal:
 			{
 				switch msg.MsgType() {

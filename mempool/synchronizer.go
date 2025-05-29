@@ -57,7 +57,6 @@ func (sync *Synchronizer) Verify(proposer core.NodeID, Epoch int64, digests []cr
 		missing, proposer, Epoch, consensusblockhash,
 	}
 	sync.interChan <- message
-	logger.Error.Printf("verify error the missing payloads len is %d epoch is %d proposer is %d\n", len(missing), Epoch, proposer)
 	return Wait
 }
 
@@ -120,7 +119,6 @@ func (sync *Synchronizer) Run() {
 		case block := <-waiting:
 			{
 				if block != (crypto.Digest{}) {
-					logger.Error.Printf("successfully get the ask block\n")
 					delete(pending, block)
 					//LoopBack
 					// msg := &LoopBackMsg{
@@ -167,7 +165,10 @@ func waiter(missing []crypto.Digest, blockhash crypto.Digest, store store.Store,
 	select {
 	case <-finish:
 	case <-notify:
-		return crypto.Digest{}
+		{
+			return crypto.Digest{}
+		}
+
 	}
 	return blockhash
 }

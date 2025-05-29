@@ -65,6 +65,7 @@ func NewStore(db DB) *Store {
 						}
 						delete(pending, string(req.key))
 					}
+
 				}
 			case NOTIFYREAD:
 				{

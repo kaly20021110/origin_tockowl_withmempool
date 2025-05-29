@@ -70,7 +70,7 @@ func (q *txQueue) make() {
 		q.nums--
 	}
 	//test set
-	batch.Txs = nil
+	//batch.Txs = nil //这个地方不应该使用测试代码 测试的时候可以没有交易但是实际执行的时候应该有交易
 	q.batchChannel <- batch
 }
 
@@ -170,4 +170,8 @@ func (p *Pool) Run() {
 
 func (p *Pool) GetBatch() Batch {
 	return p.queue.get()
+}
+
+func (p *Pool) BatchChannel() chan Batch {
+	return p.batchChannel
 }

@@ -10,7 +10,7 @@ import (
 	"strconv"
 )
 
-const MAXCOUNT int = 500 //和这个数量有关系，共识延迟，具体而言应该就是,这个是超级参数，如果值太大会导致mempool一直请求；但是会导致共识延迟很大
+// const MAXCOUNT int = 500 //和这个数量有关系，共识延迟，具体而言应该就是,这个是超级参数，如果值太大会导致mempool一直请求；但是会导致共识延迟很大
 const (
 	STOP0 int8 = iota
 	STOP1

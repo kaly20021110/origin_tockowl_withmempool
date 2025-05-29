@@ -232,7 +232,7 @@ func (c *Core) getCBCInstance(epoch int64, node core.NodeID) *Promote {
 func (c *Core) generatorConsensusBlock(epoch int64, prehash crypto.Digest, prenodeid core.NodeID) *ConsensusBlock {
 	referencechan := make(chan []crypto.Digest)
 	msg := &mempool.MakeConsensusBlockMsg{
-		MaxBlockSize: uint64(MAXCOUNT), Blocks: referencechan,
+		MaxBlockSize: c.Parameters.PayloadSize, Blocks: referencechan,
 	}
 	c.Transimtor.ConnectRecvChannel() <- msg
 	referrences := <-referencechan
@@ -319,24 +319,25 @@ func (c *Core) CommitAncestor(lastepoch int64, nowepoch int64, block *ConsensusB
 
 // 提交某个共识块
 func (c *Core) TrytoCommit(consensusblock *ConsensusBlock) bool {
-	//张健提了一个建议，是直接先提交某些payload，然后收到之后再提交剩下的payload
-	if ok := c.verifyConsensusBlock(consensusblock); !ok { //verify中已经去要一些区块了
+	if ok := c.verifyConsensusBlock(consensusblock); !ok {
 		logger.Debug.Printf("len of the paylads %d\n", len(consensusblock.Referrence))
 		return false
 	} else {
-		logger.Info.Printf("commit ConsensusBlock epoch %d proposer %d\n", consensusblock.Epoch, consensusblock.Proposer)
+
 		for _, smallblockhash := range consensusblock.Referrence {
 			if smallblock, err := c.MemPool.GetBlock(smallblockhash); err != nil {
-				logger.Error.Printf("get payload error\n") //没拿到所有的区块
+				logger.Error.Printf("get payload error\n")
 			} else {
 				c.Commitor.Commit(smallblock)
 			}
 		}
+		logger.Info.Printf("commit ConsensusBlock epoch %d proposer %d\n", consensusblock.Epoch, consensusblock.Proposer)
 		msg := &mempool.CleanBlockMsg{
 			Digests: consensusblock.Referrence,
 			Epoch:   consensusblock.Epoch,
 		}
 		c.Transimtor.ConnectRecvChannel() <- msg
+
 		return true
 	}
 }
@@ -376,15 +377,13 @@ func (c *Core) handleProposal(p *CBCProposal) error {
 			return nil
 		}
 
-		//这里为什么会出现要不到的情况呢？
-		// if ok := c.verifyConsensusBlock(p.B); !ok {
-		// 	logger.Info.Printf("payloads missing and ask mempool to get in Epoch %d\n", p.Epoch)
-		// 	logger.Debug.Printf("checkreferrence error and try to retriver Author %d Epoch %d lenof Reference %d\n", p.Author, p.Epoch, len(p.B.Referrence))
-		// 	return nil
-		// }
+		if ok := c.verifyConsensusBlock(p.B); !ok {
+			logger.Info.Printf("payloads missing and ask mempool to get in Epoch %d\n", p.Epoch)
+			logger.Debug.Printf("checkreferrence error and try to retriver Author %d Epoch %d lenof Reference %d\n", p.Author, p.Epoch, len(p.B.Referrence))
+			return nil
+		}
 		if miss, ok := c.CheckReference(p.B); !ok {
 			//retrieve miss block
-			logger.Info.Printf("retrieve last miss block in epoch %d\n", p.Epoch)
 			c.Retriever.requestBlocks(miss, p.Author, p.B.Hash())
 			logger.Error.Printf("Error Reference Author %d Epoch %d\n", p.Author, p.Epoch)
 			return nil
@@ -473,8 +472,6 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 				if bestv.BestNode == core.NONE {
 					bestv.BestNode = node
 					bestv.BestIndex = i
-					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					//bestv.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
 					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
 					if exist {
 						bestv.BestQC = blockhash
@@ -487,9 +484,6 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 				if bestq1.BestNode == core.NONE {
 					bestq1.BestNode = node
 					bestq1.BestIndex = i
-					//bestq1.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
-					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					//bestq1.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
 					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
 					if exist {
 						bestq1.BestQC = blockhash
@@ -502,9 +496,6 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 				if bestq2.BestNode == core.NONE {
 					bestq2.BestNode = node
 					bestq2.BestIndex = i
-					//bestq2.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
-					//ERROR 01 panic: runtime error: invalid memory address or nil pointer dereference
-					//bestq2.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
 					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
 					if exist {
 						bestq2.BestQC = blockhash
@@ -517,8 +508,6 @@ func (c *Core) handleElectShare(e *ElectShare) error {
 				if bestq3.BestNode == core.NONE {
 					bestq3.BestNode = node
 					bestq3.BestIndex = i
-					//bestq3.BestQC = c.CBCInstancesBlockHash[e.Epoch][node]
-					//bestq3.BestQC = *c.getCBCInstance(e.Epoch, node).BlockHash()
 					blockhash, exist := c.GetCBCBlockHash(e.Epoch, node)
 					if exist {
 						bestq3.BestQC = blockhash
@@ -748,14 +737,14 @@ func (c *Core) stopProtocol(epoch int64, phase int8) bool {
 
 func (c *Core) Run() {
 	if c.Name < core.NodeID(c.Parameters.Faults) {
-		// logger.Debug.Printf("Node %d is faulty\n", c.Name)
-		// return
-		c.initStopCore(c.Epoch)
-		if c.stopProtocol(c.Epoch, STOP0) {
-			logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
-			c.advanceNextEpoch(c.Epoch+1, crypto.Digest{}, core.NONE)
-			return
-		}
+		logger.Debug.Printf("Node %d is faulty\n", c.Name)
+		return
+		// c.initStopCore(c.Epoch)
+		// if c.stopProtocol(c.Epoch, STOP0) {
+		// 	logger.Debug.Printf("c.stopProtocol(m.Epoch, STOP0\n")
+		// 	c.advanceNextEpoch(c.Epoch+1, crypto.Digest{}, core.NONE)
+		// 	return
+		// }
 	}
 
 	go c.MemPool.Run()
