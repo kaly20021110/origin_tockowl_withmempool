@@ -232,7 +232,7 @@ func (c *Core) getCBCInstance(epoch int64, node core.NodeID) *Promote {
 func (c *Core) generatorConsensusBlock(epoch int64, prehash crypto.Digest, prenodeid core.NodeID) *ConsensusBlock {
 	referencechan := make(chan []crypto.Digest)
 	msg := &mempool.MakeConsensusBlockMsg{
-		MaxBlockSize: c.Parameters.PayloadSize, Blocks: referencechan,
+		MaxBlockSize: c.Parameters.MaxPayloadSize, Blocks: referencechan,
 	}
 	c.Transimtor.ConnectRecvChannel() <- msg
 	referrences := <-referencechan

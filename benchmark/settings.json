@@ -1,7 +1,7 @@
 {
     "key": {
-        "name": "dcz",
-        "path": "/root/.ssh/id_rsa",
+        "name": "tockowl",
+        "path": "/root/.ssh/Aliyun",
         "accesskey": "/root/.aliyun/access.json"
     },
     "ports": {

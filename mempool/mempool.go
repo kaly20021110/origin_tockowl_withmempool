@@ -80,7 +80,7 @@ func (c *Mempool) GetBlock(digest crypto.Digest) (*Block, error) {
 
 func (m *Mempool) payloadProcess(block *Block) error {
 
-	if uint64(len(m.Queue)) >= m.Parameters.MaxMempoolQueenSize {
+	if uint64(len(m.Queue)) >= m.Parameters.MaxQueenSize {
 		return core.ErrFullMemory(m.Name)
 	}
 	//本地存储
@@ -97,7 +97,7 @@ func (m *Mempool) payloadProcess(block *Block) error {
 
 func (m *Mempool) HandleOwnBlock(block *OwnBlockMsg) error {
 	//logger.Debug.Printf("handle mempool OwnBlockMsg\n")  自己的值先不加入自己的内存池队列，给一个缓冲的时间，尽量减少去要payload的时间
-	if uint64(len(m.Queue)) >= m.Parameters.MaxMempoolQueenSize {
+	if uint64(len(m.Queue)) >= m.Parameters.MaxQueenSize {
 		return core.ErrFullMemory(m.Name)
 	}
 	digest := block.Block.Hash()
@@ -105,17 +105,17 @@ func (m *Mempool) HandleOwnBlock(block *OwnBlockMsg) error {
 		return err
 	}
 	m.Queue[digest] = struct{}{}
-	// if block.Block.Batch.ID != -1 {
-	// 	m.Count++
-	// 	logger.Warn.Printf("mempool payload count is %d\n", m.Count)
-	// }
+	if block.Block.Batch.ID != -1 {
+		m.Count++
+		logger.Warn.Printf("recieve payload from %d and batchid is %d and all count is %d\n", block.Block.Proposer, block.Block.Batch.ID, m.Count)
+	}
 	return nil
 }
 
 func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 	//m.generateBlocks()
 	//logger.Debug.Printf("handle mempool otherBlockMsg\n")
-	if uint64(len(m.Queue)) >= m.Parameters.MaxMempoolQueenSize {
+	if uint64(len(m.Queue)) >= m.Parameters.MaxQueenSize {
 		logger.Error.Printf("ErrFullMemory\n")
 		return core.ErrFullMemory(m.Name)
 	}
@@ -136,7 +136,7 @@ func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 
 	if block.Block.Batch.ID != -1 {
 		m.Count++
-		logger.Warn.Printf("mempool payload count is %d\n", m.Count)
+		logger.Warn.Printf("recieve payload from %d and batchid is %d and all count is %d\n", block.Block.Proposer, block.Block.Batch.ID, m.Count)
 	}
 
 	return nil
@@ -211,7 +211,7 @@ func (m *Mempool) generateBlocks(batch pool.Batch) error {
 	if block.Batch.ID != -1 {
 		logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
 		m.CreateCount++
-		logger.Warn.Printf("create payload count is %d\n", m.CreateCount)
+		logger.Warn.Printf("create Block node %d batch_id %d create payload length is %d\n", block.Proposer, block.Batch.ID, m.CreateCount)
 		ownmessage := &OwnBlockMsg{
 			Block: block,
 		}

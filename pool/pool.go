@@ -71,6 +71,7 @@ func (q *txQueue) make() {
 	}
 	//test set
 	//batch.Txs = nil //这个地方不应该使用测试代码 测试的时候可以没有交易但是实际执行的时候应该有交易
+	//batch.Txs = make([]Transaction, 256)
 	q.batchChannel <- batch
 }
 

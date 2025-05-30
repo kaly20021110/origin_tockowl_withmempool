@@ -195,7 +195,7 @@ func (msg *LoopBackMsg) Module() string {
 }
 
 const (
-	OwnBlockType int = iota + 8
+	OwnBlockType int = iota + 7
 	OtherBlockType
 	RequestBlockType
 	MakeBlockType
