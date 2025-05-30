@@ -60,7 +60,7 @@ func NewCore(
 ) *Core {
 	loopBackchannel := make(chan crypto.Digest)
 	BlockloopBackChannel := make(chan *ConsensusBlock)
-	Sync := mempool.NewSynchronizer(Name, Transimtor, loopBackchannel, Store)
+	Sync := mempool.NewSynchronizer(Name, Transimtor, loopBackchannel, Parameters, Store)
 	c := &Core{
 		Name:                    Name,
 		Committee:               Committee,

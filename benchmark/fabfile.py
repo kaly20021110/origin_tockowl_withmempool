@@ -141,7 +141,7 @@ def remote(ctx):
             "max_payload_size": 1_000,
             "max_queen_size": 10_000,
             "min_Payload_delay": 0,
-            "sync_retry_delay": 10_000
+            "sync_retry_delay": 1_000
         }
     }
     try:

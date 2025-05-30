@@ -13,6 +13,7 @@ type Synchronizer struct {
 	Store        *store.Store
 	Transimtor   *core.Transmitor
 	LoopBackChan chan crypto.Digest
+	Parameters   core.Parameters
 	//consensusCoreChan chan<- core.Messgae //只接收消息
 	interChan chan core.Messgae
 }
@@ -21,6 +22,7 @@ func NewSynchronizer(
 	Name core.NodeID,
 	Transimtor *core.Transmitor,
 	LoopBackChan chan crypto.Digest,
+	Parameters core.Parameters,
 	//consensusCoreChan chan<- core.Messgae,
 	store *store.Store,
 ) *Synchronizer {
@@ -29,6 +31,7 @@ func NewSynchronizer(
 		Store:        store,
 		Transimtor:   Transimtor,
 		LoopBackChan: LoopBackChan,
+		Parameters:   Parameters,
 		//consensusCoreChan: consensusCoreChan,
 		interChan: make(chan core.Messgae, 1000),
 	}
@@ -132,7 +135,7 @@ func (sync *Synchronizer) Run() {
 			{
 				now := time.Now()
 				for digest, entry := range pending {
-					if now.Sub(entry.LastSend) > 1000*time.Millisecond { // 超时重发阈值
+					if now.Sub(entry.LastSend) > (time.Duration(sync.Parameters.SyncRetryDelay) * time.Millisecond) { // 超时重发阈值
 						logger.Info.Printf("recycle request and len of pending is %d\n", len(pending))
 						// 重发请求
 						msg := &RequestBlockMsg{
