@@ -4,22 +4,29 @@ import (
 	"bft/mvba/core"
 	"bft/mvba/crypto"
 	"bft/mvba/logger"
+	"bft/mvba/network"
 	"bft/mvba/pool"
 	"bft/mvba/store"
+	"fmt"
+	"net"
+	"strings"
+	"sync"
+	"time"
 )
 
 type Mempool struct {
-	Name        core.NodeID
-	Committee   core.Committee
-	Parameters  core.Parameters
-	SigService  *crypto.SigService
-	Store       *store.Store
-	TxPool      *pool.Pool
-	Transimtor  *core.Transmitor
-	Queue       map[crypto.Digest]struct{} //整个mempool的最大容量
-	Sync        *Synchronizer
-	Count       int64
-	CreateCount int64
+	Name              core.NodeID
+	Committee         core.Committee
+	Parameters        core.Parameters
+	SigService        *crypto.SigService
+	Store             *store.Store
+	TxPool            *pool.Pool
+	Transimtor        *Transmit
+	Queue             map[crypto.Digest]struct{} //整个mempool的最大容量
+	ActualQueue       []crypto.Digest            //按照收到时间的排序的实际payload序列
+	OwnPayLoadChannel []*Block
+	Sync              *Synchronizer
+	connectChannel    chan core.Messgae
 	//ConsensusMempoolCoreChan <-chan core.Messgae
 }
 
@@ -30,25 +37,59 @@ func NewMempool(
 	SigService *crypto.SigService,
 	Store *store.Store,
 	TxPool *pool.Pool,
-	Transimtor *core.Transmitor,
-	Sync *Synchronizer,
-	//consensusMempoolCoreChan <-chan core.Messgae,
+	loopbackchannel chan crypto.Digest,
+	consensusMempoolCoreChan chan core.Messgae,
 ) *Mempool {
 	m := &Mempool{
-		Name:        Name,
-		Committee:   Committee,
-		Parameters:  Parameters,
-		SigService:  SigService,
-		Store:       Store,
-		TxPool:      TxPool,
-		Transimtor:  Transimtor,
-		Queue:       make(map[crypto.Digest]struct{}),
-		Sync:        Sync,
-		Count:       0,
-		CreateCount: 0,
-		//ConsensusMempoolCoreChan: consensusMempoolCoreChan,
+		Name:           Name,
+		Committee:      Committee,
+		Parameters:     Parameters,
+		SigService:     SigService,
+		Store:          Store,
+		TxPool:         TxPool,
+		Queue:          make(map[crypto.Digest]struct{}),
+		ActualQueue:    make([]crypto.Digest, 0),
+		connectChannel: consensusMempoolCoreChan,
 	}
+	transmitor := initmempooltransmit(Name, Committee, Parameters)
+	m.Transimtor = transmitor
+	m.Sync = NewSynchronizer(Name, transmitor, loopbackchannel, Parameters, Store)
 	return m
+}
+
+func initmempooltransmit(id core.NodeID, committee core.Committee, parameters core.Parameters) *Transmit {
+	//step1 .Invoke networl
+	addr := fmt.Sprintf(":%s", strings.Split(committee.MempoolAddress(id), ":")[1])
+	cc := network.NewCodec(DefaultMessageTypeMap)
+	sender := network.NewSender(cc)
+	go sender.Run()
+	receiver := network.NewReceiver(addr, cc)
+	go receiver.Run()
+	transimtor := NewTransmit(sender, receiver, parameters, committee)
+
+	//Step 2: Waiting for all nodes to be online
+	logger.Info.Println("Waiting for all mempool nodes to be online...")
+	time.Sleep(time.Millisecond * time.Duration(parameters.SyncTimeout))
+	addrs := committee.MempoolBroadCast(id)
+	wg := sync.WaitGroup{}
+	for _, addr := range addrs {
+		wg.Add(1)
+		go func(address string) {
+			defer wg.Done()
+			for {
+				conn, err := net.Dial("tcp", address)
+				if err != nil {
+					time.Sleep(time.Microsecond * 200)
+					continue
+				}
+				conn.Close()
+				break
+			}
+		}(addr)
+	}
+	wg.Wait()
+
+	return transimtor
 }
 
 func (c *Mempool) StoreBlock(block *Block) error {
@@ -89,9 +130,10 @@ func (m *Mempool) payloadProcess(block *Block) error {
 	}
 	//转发给其他人
 	message := &OtherBlockMsg{
-		Block: block,
+		Author: m.Name,
+		Block:  block,
 	}
-	m.Transimtor.Send(m.Name, core.NONE, message)
+	m.Transimtor.MempoolSend(m.Name, core.NONE, message)
 	return nil
 }
 
@@ -105,15 +147,13 @@ func (m *Mempool) HandleOwnBlock(block *OwnBlockMsg) error {
 		return err
 	}
 	m.Queue[digest] = struct{}{}
-	if block.Block.Batch.ID != -1 {
-		m.Count++
-		logger.Warn.Printf("recieve payload from %d and batchid is %d and all count is %d\n", block.Block.Proposer, block.Block.Batch.ID, m.Count)
-	}
+	m.ActualQueue = append(m.ActualQueue, digest)
 	return nil
 }
 
 func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 	//m.generateBlocks()
+	logger.Info.Printf("receive other blocks from sender %d and the block author %d batchID is %d hash is %v\n", block.Author, block.Block.Proposer, block.Block.Batch.ID, block.Block.Hash())
 	//logger.Debug.Printf("handle mempool otherBlockMsg\n")
 	if uint64(len(m.Queue)) >= m.Parameters.MaxQueenSize {
 		logger.Error.Printf("ErrFullMemory\n")
@@ -123,35 +163,31 @@ func (m *Mempool) HandleOthorBlock(block *OtherBlockMsg) error {
 	digest := block.Block.Hash()
 	// Verify that the payload is correctly signed.
 	if flag := block.Block.Verify(m.Committee); !flag {
-		return nil
-	}
-	//如果已经存储了就舍弃
-	if _, err := m.GetBlock(block.Block.Hash()); err == nil {
+		logger.Error.Printf("Block sign error\n")
 		return nil
 	}
 	if err := m.StoreBlock(block.Block); err != nil {
+		logger.Debug.Printf("HandleOthorBlock and store error\n")
 		return err
 	}
 	m.Queue[digest] = struct{}{}
-
-	if block.Block.Batch.ID != -1 {
-		m.Count++
-		logger.Warn.Printf("recieve payload from %d and batchid is %d and all count is %d\n", block.Block.Proposer, block.Block.Batch.ID, m.Count)
-	}
-
+	m.ActualQueue = append(m.ActualQueue, digest)
 	return nil
 }
 
 func (m *Mempool) HandleRequestBlock(request *RequestBlockMsg) error {
-	logger.Debug.Printf("handle mempool RequestBlockMsg from %d\n", request.Author)
+	logger.Debug.Printf("handle mempool RequestBlockMsg from %d and the missing block length is %d\n", request.Author, len(request.Digests))
 	for _, digest := range request.Digests {
 		if b, err := m.GetBlock(digest); err != nil {
+			logger.Debug.Printf("handle mempool RequestBlockMsg from %d error can not get the right payload\n", request.Author)
 			return err
 		} else {
 			message := &OtherBlockMsg{
-				Block: b,
+				Author: m.Name,
+				Block:  b,
 			}
-			m.Transimtor.Send(m.Name, request.Author, message) //只发给向自己要的人
+			m.Transimtor.MempoolSend(m.Name, request.Author, message) //只发给向自己要的人
+			logger.Debug.Printf("send the missing payload to node %d\n", request.Author)
 			//m.Transimtor.Send(m.Name, core.NONE, message) //发给所有人
 		}
 	}
@@ -160,8 +196,6 @@ func (m *Mempool) HandleRequestBlock(request *RequestBlockMsg) error {
 
 // 获取共识区块所引用的微区块
 func (m *Mempool) HandleMakeBlockMsg(makemsg *MakeConsensusBlockMsg) ([]crypto.Digest, error) {
-	//nums := makemsg.MaxBlockSize / uint64(len(crypto.Digest{}))
-
 	nums := makemsg.MaxBlockSize
 	ret := make([]crypto.Digest, 0)
 	if len(m.Queue) == 0 {
@@ -176,7 +210,8 @@ func (m *Mempool) HandleMakeBlockMsg(makemsg *MakeConsensusBlockMsg) ([]crypto.D
 		}
 		ret = append(ret, digest)
 	} else {
-		logger.Debug.Printf("HandleMakeBlockMsg and len(m.Queue) %d\n", len(m.Queue))
+		logger.Debug.Printf("HandleMakeBlockMsg and len(m.Queue) %d the payloadsize is %d\n", len(m.Queue), nums)
+
 		for key := range m.Queue {
 			ret = append(ret, key)
 			nums--
@@ -184,10 +219,37 @@ func (m *Mempool) HandleMakeBlockMsg(makemsg *MakeConsensusBlockMsg) ([]crypto.D
 				break
 			}
 		}
-		//移除
+		// //移除
 		for _, key := range ret {
 			delete(m.Queue, key)
 		}
+		// if len(m.ActualQueue) <= nums {
+		// 	for _, value := range m.ActualQueue {
+		// 		ret = append(ret, value)
+		// 		nums--
+		// 		if nums == 0 {
+		// 			break
+		// 		}
+		// 	}
+		// 	//清空队列
+		// 	m.ActualQueue = m.ActualQueue[:0]
+		// } else {
+		// 	index := nums
+		// 	for _, value := range m.ActualQueue {
+		// 		ret = append(ret, value)
+		// 		nums--
+		// 		if nums == 0 {
+		// 			break
+		// 		}
+		// 	}
+		//	m.ActualQueue = m.ActualQueue[index:]
+		//}
+
+		//移除
+		// for _, key := range ret {
+		// 	delete(m.Queue, key)
+		// }
+
 	}
 	return ret, nil
 }
@@ -197,7 +259,7 @@ func (m *Mempool) HandleCleanBlock(msg *CleanBlockMsg) error {
 	for _, digest := range msg.Digests {
 		delete(m.Queue, digest)
 	}
-	//同步其他节点清理删除payload
+	//同步清楚某个epoch之前的所有请求
 	m.Sync.Cleanup(uint64(msg.Epoch))
 	return nil
 }
@@ -206,33 +268,39 @@ func (m *Mempool) HandleVerifyMsg(msg *VerifyBlockMsg) VerifyStatus {
 	return m.Sync.Verify(msg.Proposer, msg.Epoch, msg.Payloads, msg.ConsensusBlockHash)
 }
 
-func (m *Mempool) generateBlocks(batch pool.Batch) error {
-	block, _ := NewBlock(m.Name, batch, m.SigService)
-	if block.Batch.ID != -1 {
-		logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
-		m.CreateCount++
-		logger.Warn.Printf("create Block node %d batch_id %d create payload length is %d\n", block.Proposer, block.Batch.ID, m.CreateCount)
-		ownmessage := &OwnBlockMsg{
-			Block: block,
+func (m *Mempool) generateBlocks() error {
+	batchChannal := m.TxPool.BatchChannel()
+	for batch := range batchChannal {
+		block, _ := NewBlock(m.Name, batch, m.SigService)
+		if block.Batch.ID != -1 {
+			logger.Info.Printf("create Block node %d batch_id %d \n", block.Proposer, block.Batch.ID)
+			m.OwnPayLoadChannel = append(m.OwnPayLoadChannel, block)
+			ownmessage := &OwnBlockMsg{
+				Block: block,
+			}
+			m.Transimtor.MempoolChannel() <- ownmessage
+			time.Sleep(time.Duration(m.Parameters.MinPayloadDelay) * time.Millisecond)
 		}
-		m.Transimtor.MempololRecvChannel() <- ownmessage
 	}
 	return nil
 }
 
 func (m *Mempool) Run() {
-
+	//一直广播微区块
+	if m.Name < core.NodeID(m.Parameters.Faults) {
+		logger.Debug.Printf("Node %d is faulty\n", m.Name)
+		return
+	}
 	go m.Sync.Run()
+	go m.generateBlocks()
 
 	//监听mempool的消息通道
-	mempoolrecvChannal := m.Transimtor.MempololRecvChannel()
-	connectrecvChannal := m.Transimtor.ConnectRecvChannel()
-	batchChannal := m.TxPool.BatchChannel()
+	mempoolrecvChannal := m.Transimtor.MempoolChannel()
+	connectrecvChannal := m.connectChannel
+
 	for {
 		var err error
 		select {
-		case batch := <-batchChannal:
-			err = m.generateBlocks(batch)
 		case msg := <-connectrecvChannal:
 			{
 				switch msg.MsgType() {
@@ -255,7 +323,7 @@ func (m *Mempool) Run() {
 					}
 				}
 			}
-		case msg := <-mempoolrecvChannal:
+		case msg := <-mempoolrecvChannal: //一直在处理requestblock的消息，不咋处理ownblock和otherblock
 			{
 				switch msg.MsgType() {
 				case OwnBlockType:

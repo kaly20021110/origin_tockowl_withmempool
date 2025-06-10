@@ -6,7 +6,7 @@ class SettingsError(Exception):
 
 
 class Settings:
-    def __init__(self, key_name, key_path,accesskey_path, consensus_port,instance_type, aws_regions):
+    def __init__(self, key_name, key_path,accesskey_path, consensus_port, mempool_port, instance_type, aws_regions):
         regions = aws_regions if isinstance(
             aws_regions, list) else [aws_regions]
         inputs_str = [
@@ -25,6 +25,7 @@ class Settings:
         self.accesskey_path = accesskey_path
         
         self.consensus_port = consensus_port
+        self.mempool_port = mempool_port
 
         self.instance_type = instance_type
         self.aws_regions = regions
@@ -40,6 +41,7 @@ class Settings:
                 data['key']['path'],
                 data['key']['accesskey'],
                 data['ports']['consensus'],
+                data['ports']['mempool'],
                 data['instances']['type'],
                 data['instances']['regions'],
             )

@@ -140,9 +140,10 @@ func GenCommitteeFromFile(filename string) (core.Committee, error) {
 			info := item.(map[string]interface{})
 			name, _ := crypto.DecodePublicKey([]byte(info["name"].(string)))
 			committee.Authorities[core.NodeID(ID)] = core.Authority{
-				Addr: info["addr"].(string),
-				Id:   core.NodeID(ID),
-				Name: name,
+				Addr:        info["addr"].(string),
+				Id:          core.NodeID(ID),
+				Name:        name,
+				MempoolAddr: info["mempool_addr"].(string),
 			}
 		}
 		return committee, nil

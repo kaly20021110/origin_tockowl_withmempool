@@ -116,9 +116,9 @@ class Bench:
 
         cmd = [
             'sudo apt-get update',
-            'sudo dpkg --configure -a',
-            'sudo apt-get -y upgrade',
-            'sudo apt-get -y autoremove',
+            # 'sudo dpkg --configure -a',
+            # 'sudo apt-get -y upgrade',
+            # 'sudo apt-get -y autoremove',
 
             # The following dependencies prevent the error: [error: linker `cc` not found].
           #  'sudo apt-get -y install tmux',
@@ -180,7 +180,12 @@ class Bench:
             for i in range(node_instance):
                 consensus_addr += [f'{ip}:{self.settings.consensus_port+i}']
 
-        committee = Committee(names, ids, consensus_addr)
+        mempool_addr = []
+        for ip in hosts:
+            for i in range(node_instance):
+                mempool_addr += [f'{ip}:{self.settings.mempool_port+i}']
+                
+        committee = Committee(names, ids, consensus_addr, mempool_addr)
         committee.print(PathMaker.committee_file())
 
         # Cleanup all nodes.

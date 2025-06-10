@@ -23,6 +23,9 @@ func Consensus(
 	store *store.Store,
 	sigService *crypto.SigService,
 	callBack chan<- struct{},
+	loopbackchannel chan crypto.Digest,
+	connectChannel chan core.Messgae,
+	pool *mempool.Mempool,
 ) error {
 	logger.Info.Printf(
 		"Consensus Node ID: %d\n",
@@ -41,12 +44,12 @@ func Consensus(
 
 	//step1 .Invoke networl
 	addr := fmt.Sprintf(":%s", strings.Split(committee.Address(id), ":")[1])
-	cc := network.NewCodec(DefaultMessageTypeMap, mempool.DefaultMessageTypeMap) //消息类型注册表
-	sender := network.NewSender(cc)
-	go sender.Run()
-	receiver := network.NewReceiver(addr, cc)
-	go receiver.Run()
-	transimtor := core.NewTransmitor(sender, receiver, parameters, committee)
+	cc := network.NewCodec(DefaultMessageTypeMap) //消息类型注册表
+	sender1 := network.NewSender(cc)
+	go sender1.Run()
+	receiver1 := network.NewReceiver(addr, cc)
+	go receiver1.Run()
+	transimtor := core.NewTransmitor(sender1, receiver1, parameters, committee)
 	//Step 2: Waiting for all nodes to be online
 	logger.Info.Println("Waiting for all nodes to be online...")
 	time.Sleep(time.Millisecond * time.Duration(parameters.SyncTimeout))
@@ -72,7 +75,8 @@ func Consensus(
 	txpool.Run()
 
 	//Step 3: start protocol
-	core := NewCore(id, committee, parameters, sigService, store, txpool, transimtor, callBack)
+	core := NewCore(id, committee, parameters, sigService, store, txpool, transimtor, callBack, loopbackchannel, connectChannel, pool)
+	go pool.Run()
 	go core.Run()
 
 	return nil

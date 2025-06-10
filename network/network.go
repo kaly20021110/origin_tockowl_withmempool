@@ -53,7 +53,7 @@ func (s *Sender) SendChannel() chan<- *NetMessage {
 }
 
 func (s *Sender) connect(addr string) (chan<- Messgae, error) {
-	msgCh := make(chan Messgae, 1000)
+	msgCh := make(chan Messgae, 10_000)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		logger.Warn.Printf("Failed to connect to %s: %v \n", addr, err)

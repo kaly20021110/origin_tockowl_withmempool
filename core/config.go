@@ -44,9 +44,10 @@ type NodeID int
 const NONE NodeID = -1
 
 type Authority struct {
-	Name crypto.PublickKey `json:"name"`
-	Id   NodeID            `json:"node_id"`
-	Addr string            `json:"addr"`
+	Name        crypto.PublickKey `json:"name"`
+	Id          NodeID            `json:"node_id"`
+	Addr        string            `json:"addr"`
+	MempoolAddr string            `json:"mempool_addr"`
 }
 
 type Committee struct {
@@ -81,6 +82,21 @@ func (c Committee) BroadCast(id NodeID) []string {
 	for nodeid, a := range c.Authorities {
 		if nodeid != id {
 			addrs = append(addrs, a.Addr)
+		}
+	}
+	return addrs
+}
+
+func (c Committee) MempoolAddress(id NodeID) string {
+	a := c.Authorities[id]
+	return a.MempoolAddr
+}
+
+func (c Committee) MempoolBroadCast(id NodeID) []string {
+	addrs := make([]string, 0)
+	for nodeid, a := range c.Authorities {
+		if nodeid != id {
+			addrs = append(addrs, a.MempoolAddr)
 		}
 	}
 	return addrs

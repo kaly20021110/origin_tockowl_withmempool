@@ -18,8 +18,8 @@ from alibaba.settings import Settings, SettingsError
 
 
 class InstanceManager:
-    INSTANCE_NAME = 'BFT-MVBA'
-    SECURITY_GROUP_NAME = 'BFT-MVBA'
+    INSTANCE_NAME = 'TockOwl'
+    SECURITY_GROUP_NAME = 'TockOwl'
     VPC_NAME = 'lightDAG'
 
     def __init__(self, settings):
@@ -136,6 +136,13 @@ class InstanceManager:
                         port_range= f'{self.settings.consensus_port}/{self.settings.consensus_port+4}',
                         description='Consensus port'
                     ),
+                    ecs_20140526_models.AuthorizeSecurityGroupRequestPermissions(
+                        priority='1',
+                        ip_protocol='TCP',
+                        source_cidr_ip='0.0.0.0/0',
+                        port_range= f'{self.settings.mempool_port}/{self.settings.mempool_port+4}',
+                        description='Mempool port'
+                    ),                    
                 ]
             )
             client.authorize_security_group_with_options(authorize_security_group_request, self.aliyun_runtime)
@@ -204,8 +211,8 @@ class InstanceManager:
                     instance_type = self.settings.instance_type,
                     instance_name = self.INSTANCE_NAME,
                     host_name = 'ubuntu',
-                    internet_max_bandwidth_in = 10,
-                    internet_max_bandwidth_out = 10,
+                    internet_max_bandwidth_in = 100,
+                    internet_max_bandwidth_out = 100,
                     unique_suffix = False,
                     internet_charge_type = 'PayByTraffic',
                     key_pair_name = self.settings.key_name,

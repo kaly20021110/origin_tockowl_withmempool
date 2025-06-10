@@ -2,6 +2,7 @@ package pool
 
 import (
 	"bft/mvba/logger"
+	"crypto/rand"
 	"time"
 )
 
@@ -69,9 +70,6 @@ func (q *txQueue) make() {
 		batch.Txs = append(batch.Txs, q.queue[q.rind])
 		q.nums--
 	}
-	//test set
-	//batch.Txs = nil //这个地方不应该使用测试代码 测试的时候可以没有交易但是实际执行的时候应该有交易
-	//batch.Txs = make([]Transaction, 256)
 	q.batchChannel <- batch
 }
 
@@ -109,6 +107,11 @@ func (maker *txMaker) run(txChannel chan<- Transaction) {
 	for range ticker.C {
 		for i := 0; i < nums; i++ {
 			tx := make(Transaction, maker.txSize)
+			_, err := rand.Read(tx)
+			if err != nil {
+				logger.Error.Printf("failed to generate random tx: %v", err)
+				continue
+			}
 			txChannel <- tx
 		}
 	}
@@ -141,7 +144,7 @@ func NewPool(parameters Parameters, N, Id int) *Pool {
 		parameters.Rate,
 	)
 
-	batchChannel, txChannel := make(chan Batch, 1_000), make(chan Transaction, 10_000)
+	batchChannel, txChannel := make(chan Batch, 10_000), make(chan Transaction, 10_000)
 	p := &Pool{
 		parameters:   parameters,
 		txChannel:    txChannel,

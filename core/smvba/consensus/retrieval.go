@@ -55,7 +55,7 @@ func NewRetriever(
 		requests:        make(map[int]*RequestBlockMsg),
 		loopBackBlocks:  make(map[int]crypto.Digest),
 		loopBackCnts:    make(map[int]int),
-		reqChannel:      make(chan *reqRetrieve, 1_00),
+		reqChannel:      make(chan *reqRetrieve, 1_000),
 		miss2Blocks:     make(map[crypto.Digest][]int),
 		store:           store,
 		sigService:      sigService,
@@ -70,6 +70,7 @@ func NewRetriever(
 
 func (r *Retriever) run() {
 	ticker := time.NewTicker(time.Duration(r.parameters.RetryDelay)) //定时进行请求区块
+	defer ticker.Stop()
 	for {
 		select {
 		case req := <-r.reqChannel:

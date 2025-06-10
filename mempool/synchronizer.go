@@ -11,16 +11,16 @@ import (
 type Synchronizer struct {
 	Name         core.NodeID
 	Store        *store.Store
-	Transimtor   *core.Transmitor
+	Transimtor   *Transmit
 	LoopBackChan chan crypto.Digest
-	Parameters   core.Parameters
 	//consensusCoreChan chan<- core.Messgae //只接收消息
-	interChan chan core.Messgae
+	Parameters core.Parameters
+	interChan  chan core.Messgae
 }
 
 func NewSynchronizer(
 	Name core.NodeID,
-	Transimtor *core.Transmitor,
+	Transimtor *Transmit,
 	LoopBackChan chan crypto.Digest,
 	Parameters core.Parameters,
 	//consensusCoreChan chan<- core.Messgae,
@@ -46,7 +46,6 @@ func (sync *Synchronizer) Cleanup(epoch uint64) {
 
 // 检查proposer提出的这个块本地是否收到所有的payloads
 func (sync *Synchronizer) Verify(proposer core.NodeID, Epoch int64, digests []crypto.Digest, consensusblockhash crypto.Digest) VerifyStatus {
-	logger.Debug.Printf("sync *Synchronizer verify all small block\n")
 	var missing []crypto.Digest
 	for _, digest := range digests {
 		if _, err := sync.Store.Read(digest[:]); err != nil {
@@ -60,6 +59,7 @@ func (sync *Synchronizer) Verify(proposer core.NodeID, Epoch int64, digests []cr
 		missing, proposer, Epoch, consensusblockhash,
 	}
 	sync.interChan <- message
+	logger.Debug.Printf("verify error the missing payloads len is %d epoch is %d proposer is %d\n", len(missing), Epoch, proposer)
 	return Wait
 }
 
@@ -73,55 +73,66 @@ func (sync *Synchronizer) Run() {
 		Missing  []crypto.Digest
 		Author   core.NodeID
 	})
-	waiting := make(chan crypto.Digest, 100_000)
+	waiting := make(chan crypto.Digest, 10_000)
 	for {
 		select {
 		case reqMsg := <-sync.interChan:
 			{
 				switch reqMsg.MsgType() {
 				case SyncBlockType:
-					req, _ := reqMsg.(*SyncBlockMsg)
-					digest := req.ConsensusBlockHash
-					if _, ok := pending[digest]; ok {
-						continue
-					}
-
-					notify := make(chan struct{})
-					go func() {
-						waiting <- waiter(req.Missing, req.ConsensusBlockHash, *sync.Store, notify)
-					}()
-					pending[digest] = struct {
-						Epoch    uint64
-						Notify   chan<- struct{}
-						LastSend time.Time
-						Missing  []crypto.Digest
-						Author   core.NodeID
-					}{uint64(req.Epoch), notify, time.Now(), req.Missing, req.Author}
-
-					message := &RequestBlockMsg{
-						Type:    0,
-						Digests: req.Missing,
-						Author:  sync.Name,
-					}
-					//找作者要相关的区块
-					sync.Transimtor.Send(sync.Name, req.Author, message)
-				case SyncCleanUpBlockType:
-					req, _ := reqMsg.(*SyncCleanUpBlockMsg)
-					var keys []crypto.Digest
-					for key, val := range pending {
-						if val.Epoch <= req.Epoch {
-							close(val.Notify)
-							keys = append(keys, key)
+					{
+						req, _ := reqMsg.(*SyncBlockMsg)
+						digest := req.ConsensusBlockHash
+						if _, ok := pending[digest]; ok {
+							logger.Debug.Printf("verify and is asking now skip the block %v\n", digest)
+							continue
 						}
+
+						notify := make(chan struct{})
+						go func() {
+							logger.Debug.Printf("create a new goroutine for digest %v and the missing length is %d\n", req.ConsensusBlockHash, len(req.Missing))
+							waiting <- waiter(req.Missing, req.ConsensusBlockHash, *sync.Store, notify)
+						}()
+						pending[digest] = struct {
+							Epoch    uint64
+							Notify   chan<- struct{}
+							LastSend time.Time
+							Missing  []crypto.Digest
+							Author   core.NodeID
+						}{uint64(req.Epoch), notify, time.Now(), req.Missing, req.Author}
+
+						message := &RequestBlockMsg{
+							Type:    0,
+							Digests: req.Missing,
+							Author:  sync.Name,
+						}
+						//找作者要相关的区块
+						sync.Transimtor.MempoolSend(sync.Name, req.Author, message)
+
+						logger.Debug.Printf("ask the author %d for digest %d in epoch %d\n", req.Author, len(req.Missing), req.Epoch)
 					}
-					for _, key := range keys {
-						delete(pending, key)
+				case SyncCleanUpBlockType:
+					{
+						req, _ := reqMsg.(*SyncCleanUpBlockMsg)
+						var keys []crypto.Digest
+						for key, val := range pending {
+							if val.Epoch <= req.Epoch {
+								close(val.Notify)
+								keys = append(keys, key)
+							}
+						}
+						for _, key := range keys {
+							delete(pending, key)
+						}
+
 					}
+
 				}
 			}
 		case block := <-waiting:
 			{
 				if block != (crypto.Digest{}) {
+					logger.Error.Printf("successfully get the ask block\n")
 					delete(pending, block)
 					//LoopBack
 					// msg := &LoopBackMsg{
@@ -131,20 +142,22 @@ func (sync *Synchronizer) Run() {
 					//sync.Transimtor.RecvChannel() <- msg
 				}
 			}
-		case <-ticker.C: // recycle request
+		case <-ticker.C: // recycle request  超时了也不找别人要
 			{
 				now := time.Now()
 				for digest, entry := range pending {
-					if now.Sub(entry.LastSend) > (time.Duration(sync.Parameters.SyncRetryDelay) * time.Millisecond) { // 超时重发阈值
-						logger.Info.Printf("recycle request and len of pending is %d\n", len(pending))
+					if now.Sub(entry.LastSend) > time.Duration(sync.Parameters.SyncRetryDelay)*time.Millisecond { // 超时重发阈值
+						logger.Debug.Printf("recycle request and len of pending is %d\n", len(pending))
+						logger.Debug.Printf("the pending digest is %v\n", digest)
 						// 重发请求
 						msg := &RequestBlockMsg{
 							Type:    0,
 							Digests: entry.Missing,
 							Author:  sync.Name,
 						}
-						sync.Transimtor.Send(sync.Name, core.NONE, msg)
-
+						//如果很久没收到找所有人要这个区块
+						//sync.Transimtor.MempoolSend(sync.Name, core.NONE, msg)
+						sync.Transimtor.MempoolSend(sync.Name, entry.Author, msg)
 						// 更新发送时间
 						entry.LastSend = now
 						pending[digest] = entry
@@ -159,6 +172,7 @@ func (sync *Synchronizer) Run() {
 func waiter(missing []crypto.Digest, blockhash crypto.Digest, store store.Store, notify <-chan struct{}) crypto.Digest {
 	finish := make(chan struct{})
 	go func() {
+		logger.Warn.Printf("missing length is %d\n", len(missing))
 		for _, digest := range missing {
 			store.NotifyRead(digest[:])
 		}
@@ -168,10 +182,7 @@ func waiter(missing []crypto.Digest, blockhash crypto.Digest, store store.Store,
 	select {
 	case <-finish:
 	case <-notify:
-		{
-			return crypto.Digest{}
-		}
-
+		return crypto.Digest{}
 	}
 	return blockhash
 }

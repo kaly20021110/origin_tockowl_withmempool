@@ -6,6 +6,7 @@ import (
 	smvba "bft/mvba/core/smvba/consensus"
 	"bft/mvba/crypto"
 	"bft/mvba/logger"
+	"bft/mvba/mempool"
 	"bft/mvba/pool"
 	"bft/mvba/store"
 	"fmt"
@@ -49,19 +50,23 @@ func NewNode(
 	}
 
 	poolParameters, coreParameters, err := config.GenParamatersFromFile(parametersFile)
-
 	if err != nil {
 		logger.Error.Println(err)
 		return nil, err
 	}
 
-	//step 4: invoke pool and core
+	//step 4: invoke pool and mempool
 	txpool := pool.NewPool(poolParameters, commitee.Size(), nodeID)
 
 	_store := store.NewStore(store.NewDefaultNutsDB(storePath))
 	sigService := crypto.NewSigService(priKey, shareKey)
 
-	err = smvba.Consensus(core.NodeID(nodeID), commitee, coreParameters, txpool, _store, sigService, commitChannel)
+	loopbackchannel := make(chan crypto.Digest, 10_000)
+	connectChannel := make(chan core.Messgae, 10_000)
+
+	mempool := mempool.NewMempool(core.NodeID(nodeID), commitee, coreParameters, sigService, _store, txpool, loopbackchannel, connectChannel)
+	//step 5:invoke core
+	err = smvba.Consensus(core.NodeID(nodeID), commitee, coreParameters, txpool, _store, sigService, commitChannel, loopbackchannel, connectChannel, mempool)
 
 	if err != nil {
 		logger.Error.Println(err)

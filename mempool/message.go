@@ -72,7 +72,8 @@ func (own *OwnBlockMsg) Module() string {
 }
 
 type OtherBlockMsg struct {
-	Block *Block
+	Author core.NodeID
+	Block  *Block
 }
 
 func (o *OtherBlockMsg) MsgType() int {

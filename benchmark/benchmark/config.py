@@ -33,7 +33,7 @@ class TSSKey:
 
 
 class Committee:
-    def __init__(self, pubkeys, ids, consensus_addr):
+    def __init__(self, pubkeys, ids, consensus_addr, mempool_addr):
         inputs = [pubkeys, consensus_addr]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -42,13 +42,14 @@ class Committee:
         self.pubkeys = pubkeys
         self.ids = ids
         self.consensus = consensus_addr
-
+        self.mempool = mempool_addr
+        
         self.json = self._build_consensus()
 
     def _build_consensus(self):
         node = {}
-        for a, n, id in zip(self.consensus, self.pubkeys, self.ids):
-            node[id] = {'name': n, 'addr': a, 'node_id': id}
+        for a, n, id, ma in zip(self.consensus, self.pubkeys, self.ids,self.mempool):
+            node[id] = {'name': n, 'addr': a, 'node_id': id, 'mempool_addr':ma}
         return node
 
     def print(self, filename):
@@ -66,7 +67,8 @@ class LocalCommittee(Committee):
         assert isinstance(port, int)
         size = len(pubkeys)
         consensus = [f'127.0.0.1:{port + i}' for i in range(size)]
-        super().__init__(pubkeys, ids, consensus)
+        mempool = [f'127.0.0.1:{port + i + size}' for i in range(size)]
+        super().__init__(pubkeys, ids, consensus, mempool)
 
 
 class NodeParameters:

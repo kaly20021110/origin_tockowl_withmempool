@@ -92,12 +92,20 @@ func (p *Promote) ProcessProposal(proposal *CBCProposal) {
 		{
 			//*p.blockHash这个值可能为空会导致结果有问题
 			p.keyFlag.Store(true)
-			vote, _ = NewCBCVote(p.C.Name, p.Proposer, *p.blockHash, p.Epoch, CBC_TWO_PHASE, p.C.SigService)
+			blockhash := crypto.Digest{}
+			if p.blockHash != nil {
+				blockhash = *p.blockHash
+			}
+			vote, _ = NewCBCVote(p.C.Name, p.Proposer, blockhash, p.Epoch, CBC_TWO_PHASE, p.C.SigService)
 		}
 	case CBC_THREE_PHASE:
 		{
 			p.lockFlag.Store(true)
-			vote, _ = NewCBCVote(p.C.Name, p.Proposer, *p.blockHash, p.Epoch, CBC_THREE_PHASE, p.C.SigService)
+			blockhash := crypto.Digest{}
+			if p.blockHash != nil {
+				blockhash = *p.blockHash
+			}
+			vote, _ = NewCBCVote(p.C.Name, p.Proposer, blockhash, p.Epoch, CBC_THREE_PHASE, p.C.SigService)
 		}
 	case LAST:
 		{

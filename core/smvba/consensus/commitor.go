@@ -18,7 +18,7 @@ func NewCommittor(store *store.Store, callBack chan<- struct{}) *Committor {
 	c := &Committor{
 		Index:    0,
 		Blocks:   map[int64]*mempool.Block{},
-		commitCh: make(chan *mempool.Block),
+		commitCh: make(chan *mempool.Block, 1000),
 		callBack: callBack,
 		Store:    store,
 	}
